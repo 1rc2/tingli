@@ -350,7 +350,9 @@ body{min-height:100vh;padding-bottom:70px}
       </div>
       <div class="api-row">
         <input type="password" id="apiKeyInput" placeholder="ARK API Key，如 sk-..." />
+        <button class="btn btn-secondary" id="pasteKeyBtn" type="button" style="display:none;white-space:nowrap">📋 粘贴</button>
       </div>
+      <div id="keySavedTag" style="display:none;font-size:12px;color:#059669;background:#d1fae5;border-radius:6px;padding:6px 10px;margin-bottom:8px">✓ Key 已安全保存（不回显），输入新值即可更换</div>
       <div class="api-row">
         <input type="text" id="apiEndpointInput" placeholder="Endpoint ID，如 ep-2025..." />
       </div>
@@ -692,8 +694,11 @@ async function loadFromUrl(raw){
     hideLoading();
     renderPlayOnly(url);
     const isAudioLike = /\.(mp3|m4a|wav|aac|ogg|flac)(\?|$)/i.test(url);
-    showStatus('无法读取音频数据：' + (err.message||err) +
-      (isAudioLike ? '' : '（该地址不像音频直链，请换成以 .mp3 / .m4a 结尾的链接）'), 'error');
+    const detail = (err && err.message) ? err.message : String(err||'');
+    showStatus('获取音频失败：' + detail +
+      (isAudioLike
+        ? '（已切换为「仅播放」模式，可先试听；需转写请下载后本地导入）'
+        : '（该地址不像音频直链，请换成以 .mp3 / .m4a 结尾的直链）'), 'warn');
   }
 }
 
@@ -828,8 +833,8 @@ async function loadRss(){
     });
     showStatus(`读取到 ${items.length} 条音频`, 'success');
   }catch(err){
-    list.innerHTML = `<div class="hint" style="padding:10px;color:var(--danger)">读取失败：${escapeHtml(err.message||String(err))}</div>`;
-    showStatus('读取 RSS 失败：' + (err.message||err), 'error');
+    list.innerHTML = `<div class="hint" style="padding:10px;color:var(--danger)">读取订阅源失败：${escapeHtml(err.message||String(err))}<br/>可尝试刷新重试；部分海外源需要网络环境支持。</div>`;
+    showStatus('读取订阅源失败：' + (err.message||err), 'error');
   }
 }
 $('loadRssBtn').addEventListener('click', loadRss);
@@ -967,9 +972,25 @@ $('saveKeyBtn').addEventListener('click', ()=>{
   if(IS_APP){
     $('apiKeyInput').value = '';
     $('apiKeyInput').placeholder = '已保存，输入新值可更换';
+    $('keySavedTag').style.display = 'block';
   }
   showStatus('直连配置已保存','success');
   setTimeout(hideStatus, 2000);
+});
+$('pasteKeyBtn').addEventListener('click', async ()=>{
+  try{
+    const txt = await navigator.clipboard.readText();
+    if(txt && txt.trim()){
+      $('apiKeyInput').value = txt.trim();
+      state.arkApiKey = txt.trim();
+      showStatus('已粘贴到输入框，点击保存即可','success');
+      setTimeout(hideStatus, 2000);
+    } else {
+      showStatus('剪贴板为空','warn');
+    }
+  }catch(e){
+    showStatus('无法读取剪贴板，请长按输入框手动粘贴','warn');
+  }
 });
 
 /* =========================================================
@@ -1653,6 +1674,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     $('directModeHint').textContent = '直接调用 DeepSeek API（Key 存 App 本地、不回显，仅可更换）';
     $('apiKeyInput').placeholder = 'DeepSeek API Key，如 sk-...';
     $('saveKeyBtn').textContent = '保存 DeepSeek Key';
+    $('pasteKeyBtn').style.display = '';
   } else {
     switchAIMode(state.aiMode || 'proxy');
   }
@@ -1662,6 +1684,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
       // App 端：不回显明文，只提示已保存
       $('apiKeyInput').value = '';
       $('apiKeyInput').placeholder = '已保存，输入新值可更换';
+      $('keySavedTag').style.display = 'block';
     } else {
       $('apiKeyInput').value = state.arkApiKey;
     }

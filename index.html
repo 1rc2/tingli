@@ -280,7 +280,7 @@ body{min-height:100vh;padding-bottom:70px}
 
   <!-- Step 2: AI Config & Process -->
   <div id="apiArea" class="card" style="display:none">
-    <h2><span class="dot"></span>第 2 步 · AI 接口配置</h2>
+    <h2><span class="dot"></span><span id="aiStepTitle">第 2 步 · AI 接口配置</span></h2>
     <div class="mode-switch">
       <button id="modeProxyBtn" class="active">自建代理（Vercel）</button>
       <button id="modeDirectBtn">直连豆包方舟</button>
@@ -1033,6 +1033,11 @@ function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; 
    直连模式前端要带 Bearer Key + Endpoint ID
    ========================================================= */
 async function callAI(messages){
+  if(IS_APP){
+    // App 端：原生桥直连 DeepSeek，绕开 CORS，无需 Vercel 代理
+    return await callDeepSeekNative(messages);
+  }
+
   let url, headers, body;
 
   if(state.aiMode === 'proxy'){
@@ -1077,6 +1082,33 @@ async function callAI(messages){
     throw new Error('AI 未返回有效内容：' + JSON.stringify(data).slice(0,200));
   }
   return content;
+}
+
+function callDeepSeekNative(messages){
+  return new Promise((resolve, reject)=>{
+    const id = 'cb' + Date.now() + '_' + Math.floor(Math.random()*1e6);
+    window.__onDeepSeek = (cid, result)=>{
+      if(cid !== id) return;
+      if(result && result.error){ reject(new Error(result.error)); return; }
+      if(!result || result.status >= 400){
+        let msg = 'DeepSeek 错误' + (result ? ' ' + result.status : '');
+        try{
+          if(result && result.body){
+            const b = JSON.parse(result.body);
+            msg += ': ' + ((b.error && (b.error.message || b.error)) || b.message || String(result.body).slice(0,160));
+          }
+        }catch(e){}
+        reject(new Error(msg)); return;
+      }
+      try{
+        const data = JSON.parse(result.body);
+        const content = data.choices?.[0]?.message?.content;
+        if(typeof content === 'string' && content.length){ resolve(content); }
+        else reject(new Error('DeepSeek 未返回有效内容'));
+      }catch(e){ reject(new Error('DeepSeek 返回解析失败')); }
+    };
+    window.AndroidBridge.callDeepSeek(JSON.stringify(messages), id);
+  });
 }
 
 function extractJson(text){
@@ -1290,7 +1322,20 @@ $('quizBtn').addEventListener('click', generateQuiz);
 document.addEventListener('DOMContentLoaded', ()=>{
   loadAICfg();
   // 回填 UI
-  switchAIMode(state.aiMode || 'proxy');
+  if(IS_APP){
+    // App 端：无需 Vercel 代理 / 模式切换，直接 DeepSeek
+    state.aiMode = 'direct';
+    $('modeProxyBtn').parentElement.style.display = 'none';
+    $('modeProxy').style.display = 'none';
+    $('modeDirect').style.display = 'block';
+    $('apiEndpointInput').parentElement.style.display = 'none';
+    $('aiStepTitle').textContent = '第 2 步 · DeepSeek API';
+    $('directModeHint').textContent = '直接调用 DeepSeek API（Key 存 App 本地、不回显，仅可更换）';
+    $('apiKeyInput').placeholder = 'DeepSeek API Key，如 sk-...';
+    $('saveKeyBtn').textContent = '保存 DeepSeek Key';
+  } else {
+    switchAIMode(state.aiMode || 'proxy');
+  }
   if(state.proxyUrl) $('proxyUrlInput').value = state.proxyUrl;
   if(state.arkApiKey){
     if(IS_APP){
@@ -1303,7 +1348,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
   }
   if(state.arkEndpoint) $('apiEndpointInput').value = state.arkEndpoint;
   if(state.customProxy) $('customProxyInput').value = state.customProxy;
-  if(IS_APP) $('directModeHint').textContent = '直接调用豆包方舟 API（Key 存 App 本地、不回显，仅可更换）';
 });
 </script>
 </body>

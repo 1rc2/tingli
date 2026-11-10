@@ -15,8 +15,12 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URL;
+import javax.net.ssl.HttpsURLConnection;
 
 public class MainActivity extends Activity {
 
@@ -101,6 +105,48 @@ public class MainActivity extends Activity {
             public String getApiKey() {
                 return getSharedPreferences("tingli", MODE_PRIVATE).getString("apiKey", "");
             }
+            @android.webkit.JavascriptInterface
+            public void callDeepSeek(final String messagesJson, final String callbackId) {
+                // 原生侧直连 DeepSeek，绕开 WebView 的 CORS 限制
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        String result;
+                        try {
+                            String apiKey = getSharedPreferences("tingli", MODE_PRIVATE).getString("apiKey", "");
+                            if (apiKey.isEmpty()) {
+                                result = "{\"error\":\"请先填写 DeepSeek API Key\"}";
+                            } else {
+                                URL url = new URL("https://api.deepseek.com/chat/completions");
+                                HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
+                                conn.setRequestMethod("POST");
+                                conn.setRequestProperty("Content-Type", "application/json");
+                                conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+                                conn.setDoOutput(true);
+                                conn.setConnectTimeout(30000);
+                                conn.setReadTimeout(120000);
+                                String body = "{\"model\":\"deepseek-chat\",\"messages\":" + messagesJson + ",\"temperature\":0.3}";
+                                OutputStream os = conn.getOutputStream();
+                                os.write(body.getBytes("UTF-8"));
+                                os.close();
+                                int code = conn.getResponseCode();
+                                InputStream is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
+                                String resp = readStream(is);
+                                result = "{\"status\":" + code + ",\"body\":" + resp + "}";
+                            }
+                        } catch (Exception e) {
+                            String m = e.getMessage() == null ? "network error" : e.getMessage();
+                            result = "{\"error\":\"" + m.replace("\\", " ").replace("\"", "'") + "\"}";
+                        }
+                        final String fresult = result;
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                String cb = "window.__onDeepSeek && window.__onDeepSeek(" + jsonStr(callbackId) + ", " + fresult + ")";
+                                webView.evaluateJavascript(cb, null);
+                            }
+                        });
+                    }
+                }).start();
+            }
         }, "AndroidBridge");
 
         webView.loadUrl(LOCAL_ORIGIN + "index.html");
@@ -129,6 +175,18 @@ public class MainActivity extends Activity {
         } else {
             super.onActivityResult(requestCode, resultCode, data);
         }
+    }
+
+    private String readStream(InputStream is) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+        return baos.toString("UTF-8");
+    }
+
+    private String jsonStr(String s) {
+        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     @Override

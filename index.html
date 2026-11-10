@@ -9,19 +9,23 @@
 /* WaveSurfer v7 与 Transformers.js v2 都只提供 ESM 包，
    用经典 script 标签加载会直接语法报错，因此这里用动态 import() 拿命名空间。 */
 window.libsReady = (async function(){
-  try{
-    const [ws, tf] = await Promise.all([
-      import('https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.js'),
-      import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2')
-    ]);
-    window.WaveSurfer = ws.default;
-    window.transformers = tf;
-    return true;
-  }catch(err){
-    window.__libsError = err;
-    console.error('CDN 依赖加载失败:', err);
-    return false;
+  // 多个 CDN 节点依次重试（jsdelivr 官方 + fastly 镜像），国内访问更稳
+  const cdns = ['https://cdn.jsdelivr.net', 'https://fastly.jsdelivr.net'];
+  for(const base of cdns){
+    try{
+      const [ws, tf] = await Promise.all([
+        import(base + '/npm/wavesurfer.js@7/dist/wavesurfer.js'),
+        import(base + '/npm/@xenova/transformers@2.17.2')
+      ]);
+      window.WaveSurfer = ws.default;
+      window.transformers = tf;
+      return true;
+    }catch(err){
+      window.__libsError = err;
+      console.error('CDN 依赖加载失败 (' + base + '):', err);
+    }
   }
+  return false;
 })();
 </script>
 
@@ -369,7 +373,7 @@ body{min-height:100vh;padding-bottom:70px}
   <!-- WaveSurfer + Segments (精听区) -->
   <div id="playerArea" style="display:none">
     <div class="card" id="waveCard">
-      <h2><span class="dot"></span>分句精听</h2>
+      <h2><span class="dot"></span>分句精听<span id="audioFileName" style="margin-left:auto;font-weight:500;color:var(--text-muted);font-size:12px;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></h2>
       <div class="wave-container">
         <div id="waveform" class="waveform"></div>
       </div>
@@ -536,10 +540,13 @@ fileInput.addEventListener('change', e=>{
 
 function handleFile(file){
   if(!file.type.startsWith('audio') && !/\.(mp3|m4a|wav|aac|ogg|flac)$/i.test(file.name||'')){
-    showStatus('请上传音频文件','error');
+    showStatus('请上传音频文件（支持 mp3 / m4a / wav / aac / ogg / flac）','error');
+    fileInput.value = '';
     return;
   }
   loadAudioBlob(file, file.name);
+  // 重置以便再次选择同一文件也能触发 change
+  fileInput.value = '';
 }
 
 function loadAudioBlob(blob, name){
@@ -553,8 +560,13 @@ function loadAudioBlob(blob, name){
   clearResults();
   $('apiArea').style.display = 'block';
   $('playerArea').style.display = 'block';
+  // 明确显示当前已上传/加载的文件（文件名 + 大小）
+  const sizeMB = blob.size/1024/1024;
+  const sizeTxt = sizeMB >= 1 ? sizeMB.toFixed(2)+' MB' : (blob.size/1024).toFixed(0)+' KB';
+  $('audioFileName').textContent = `${name}（${sizeTxt}）`;
   initWaveSurfer();
   $('playerArea').scrollIntoView({behavior:'smooth', block:'start'});
+  showStatus(`✅ 已加载：${name}（${sizeTxt}）`, 'success');
 }
 
 /* ---------- 来源切换 ---------- */
@@ -676,7 +688,6 @@ async function loadFromUrl(raw){
     let name = 'online-audio';
     try{ name = decodeURIComponent(url.split('/').pop().split('?')[0]) || name; }catch(e){}
     loadAudioBlob(blob, name);
-    showStatus(`在线音频已加载（${(got.ab.byteLength/1024/1024).toFixed(1)} MB）`, 'success');
   }catch(err){
     hideLoading();
     renderPlayOnly(url);
@@ -829,7 +840,7 @@ $('loadRssBtn').addEventListener('click', loadRss);
 async function initWaveSurfer(){
   await window.libsReady;
   if(!window.WaveSurfer){
-    showStatus('波形库加载失败，请检查网络后刷新', 'error');
+    showStatus('⚠️ 波形组件未加载成功（网络问题），已跳过波形；可刷新重试，转写仍可尝试', 'warn');
     return;
   }
   if(state.wavesurfer){ try{ state.wavesurfer.destroy(); }catch(e){} }
@@ -850,6 +861,7 @@ async function initWaveSurfer(){
     // 波形解码失败时降级为原生播放器，保证用户仍能试听
     const wf = $('waveform');
     const msg = (err && err.message) ? err.message : String(err);
+    console.warn('波形解码失败（技术信息）:', msg);
     if(state.audioUrl && !wf.querySelector('audio')){
       const a = document.createElement('audio');
       a.controls = true;
@@ -858,7 +870,7 @@ async function initWaveSurfer(){
       wf.innerHTML = '';
       wf.appendChild(a);
     }
-    showStatus('波形解码失败：' + msg + '（已降级为原生播放器；若仍无声音，请转为标准 MP3 后重试）', 'error');
+    showStatus('⚠️ 该音频无法生成波形图，已切换为普通播放器，转写不受影响（如无法播放，请转成 MP3）', 'warn');
   });
   state.wavesurfer.on('ready', ()=>{
     $('totTime').textContent = fmtTime(state.wavesurfer.getDuration());
@@ -1660,6 +1672,15 @@ document.addEventListener('DOMContentLoaded', ()=>{
   // modal 事件（modal 元素在脚本之后，需在 DOMContentLoaded 里绑定）
   document.querySelectorAll('.modal-close').forEach(b=> b.addEventListener('click', ()=> closeModal(b.dataset.close)));
   document.querySelectorAll('.modal-mask').forEach(m=> m.addEventListener('click', e=>{ if(e.target===m) closeModal(m.id); }));
+
+  // 组件库加载状态：失败时明确提示，避免用户看到一堆"未加载"却不知道原因
+  if(window.libsReady){
+    window.libsReady.then(ok=>{
+      if(!ok){
+        showStatus('⚠️ 组件库加载失败，请检查网络后刷新页面（转写与波形依赖联网加载）', 'error');
+      }
+    });
+  }
 });
 </script>
 

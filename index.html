@@ -1,0 +1,1149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>六级听力训练 · 浏览器本地</title>
+
+<script>
+/* WaveSurfer v7 与 Transformers.js v2 都只提供 ESM 包，
+   用经典 script 标签加载会直接语法报错，因此这里用动态 import() 拿命名空间。 */
+window.libsReady = (async function(){
+  try{
+    const [ws, tf] = await Promise.all([
+      import('https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.js'),
+      import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2')
+    ]);
+    window.WaveSurfer = ws.default;
+    window.transformers = tf;
+    return true;
+  }catch(err){
+    window.__libsError = err;
+    console.error('CDN 依赖加载失败:', err);
+    return false;
+  }
+})();
+</script>
+
+<style>
+:root{
+  --bg:#f4f6f8;
+  --card:#ffffff;
+  --primary:#2a6df4;
+  --primary-light:#e8f0ff;
+  --accent:#ff6b35;
+  --text:#1f2937;
+  --text-muted:#6b7280;
+  --border:#e5e7eb;
+  --success:#10b981;
+  --danger:#ef4444;
+  --radius:12px;
+  --shadow:0 2px 12px rgba(0,0,0,0.06);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.5}
+body{min-height:100vh;padding-bottom:70px}
+
+/* Header */
+.header{background:linear-gradient(135deg,#2a6df4,#4f8bff);color:#fff;padding:16px 20px;display:flex;align-items:center;gap:12px}
+.header h1{margin:0;font-size:17px;font-weight:600;flex:1}
+.header .badge{background:rgba(255,255,255,.2);padding:2px 8px;border-radius:10px;font-size:11px}
+
+/* Container */
+.container{max-width:800px;margin:0 auto;padding:16px}
+
+/* Upload area */
+.upload-zone{background:var(--card);border:2px dashed var(--border);border-radius:var(--radius);padding:28px 16px;text-align:center;cursor:pointer;transition:all .2s}
+.upload-zone:hover,.upload-zone.active{border-color:var(--primary);background:var(--primary-light)}
+.upload-zone input{display:none}
+.upload-zone .icon{font-size:36px;margin-bottom:8px}
+.upload-zone p{margin:4px 0;color:var(--text-muted)}
+.upload-zone strong{color:var(--primary)}
+
+/* 来源面板 */
+.src-panel{display:none}
+.src-panel.active{display:block}
+.hint{font-size:12px;color:var(--text-muted);line-height:1.6}
+.hint code{background:#f3f4f6;padding:1px 4px;border-radius:4px;font-size:11px}
+.adv{margin-top:10px}
+.adv summary{cursor:pointer;font-size:12px;color:var(--text-muted);outline:none}
+.rss-list{max-height:320px;overflow-y:auto;margin-top:8px}
+.rss-item{padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:all .15s;background:#fff}
+.rss-item:hover{border-color:var(--primary);background:var(--primary-light)}
+.rss-item .rss-title{font-size:13px;font-weight:500;line-height:1.4;margin-bottom:3px}
+.rss-item .rss-meta{font-size:11px;color:var(--text-muted)}
+.player-only{border:1px solid var(--border);border-radius:8px;padding:12px;background:#fafbfc}
+.player-only audio{width:100%;margin-bottom:6px}
+
+/* Card */
+.card{background:var(--card);border-radius:var(--radius);padding:16px;margin-bottom:14px;box-shadow:var(--shadow)}
+.card h2{margin:0 0 12px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px}
+.card h2 .dot{width:6px;height:6px;background:var(--primary);border-radius:50%;display:inline-block}
+
+/* Tabs */
+.tabs{display:flex;gap:6px;background:var(--card);padding:6px;border-radius:var(--radius);margin-bottom:14px;box-shadow:var(--shadow);position:sticky;top:0;z-index:10}
+.tab{flex:1;padding:10px 4px;text-align:center;border-radius:8px;font-size:13px;color:var(--text-muted);cursor:pointer;transition:all .2s;border:none;background:transparent;font-weight:500}
+.tab.active{background:var(--primary);color:#fff;box-shadow:0 2px 8px rgba(42,109,244,.3)}
+.tab-content{display:none}
+.tab-content.active{display:block}
+
+/* API Key area */
+.api-row{display:flex;gap:8px;margin-bottom:12px}
+.api-row input,.api-row select{flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#f9fafb;outline:none;font-family:inherit}
+.api-row input:focus,.api-row select:focus{border-color:var(--primary);background:#fff}
+.mode-switch{display:flex;background:#f3f4f6;border-radius:8px;padding:4px;margin-bottom:12px}
+.mode-switch button{flex:1;padding:8px;border:none;background:transparent;border-radius:6px;font-size:13px;cursor:pointer;color:var(--text-muted);font-weight:500;transition:all .15s}
+.mode-switch button.active{background:#fff;color:var(--primary);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.btn{padding:10px 16px;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all .2s;white-space:nowrap}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:#1e5bd9}
+.btn-secondary{background:#f3f4f6;color:var(--text)}
+.btn-secondary:hover{background:#e5e7eb}
+.btn-accent{background:var(--accent);color:#fff}
+.btn-accent:hover{background:#e85a24}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-block{width:100%}
+
+/* Status bar */
+.status-bar{background:var(--primary-light);color:var(--primary);padding:10px 14px;border-radius:8px;font-size:13px;display:none;align-items:center;gap:8px;margin-bottom:12px}
+.status-bar.show{display:flex}
+.status-bar .spinner{width:16px;height:16px;border:2px solid rgba(42,109,244,.3);border-top-color:var(--primary);border-radius:50%;animation:spin 1s linear infinite}
+.status-bar.warn{background:#fef3c7;color:#92400e}
+.status-bar.warn .spinner{border-color:rgba(146,64,14,.3);border-top-color:#92400e}
+.status-bar.success{background:#d1fae5;color:#065f46}
+.status-bar.success .spinner{display:none}
+.status-bar.error{background:#fee2e2;color:#991b1b}
+.status-bar.error .spinner{display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Waveform */
+.wave-container{margin:8px -16px 0;padding:0 16px}
+.waveform{border-radius:8px;overflow:hidden}
+.wave-controls{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.wave-controls select,.wave-controls button{padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:13px;cursor:pointer}
+.wave-controls select:focus,.wave-controls button:focus{outline:none;border-color:var(--primary)}
+.time-display{font-variant-numeric:tabular-nums;color:var(--text-muted);font-size:12px}
+
+/* Segments list */
+.seg-list{max-height:400px;overflow-y:auto}
+.seg-item{padding:10px 12px;border-radius:8px;margin-bottom:6px;cursor:pointer;transition:all .15s;border:1px solid transparent;display:flex;gap:10px;align-items:flex-start}
+.seg-item:hover{background:#f3f4f6}
+.seg-item.active{background:var(--primary-light);border-color:var(--primary)}
+.seg-item .seg-time{color:var(--text-muted);font-size:11px;min-width:50px;font-variant-numeric:tabular-nums;flex-shrink:0;padding-top:2px}
+.seg-item .seg-text{flex:1;font-size:14px;line-height:1.5}
+.seg-item .seg-loop{display:none;background:#e5e7eb;border:none;border-radius:4px;padding:2px 6px;font-size:11px;cursor:pointer;flex-shrink:0}
+.seg-item:hover .seg-loop,.seg-item.looping .seg-loop{display:block}
+.seg-item.looping .seg-loop{background:var(--accent);color:#fff}
+
+/* Vocabulary */
+.vocab-empty{text-align:center;color:var(--text-muted);padding:20px}
+.vocab-list{display:flex;flex-direction:column;gap:8px}
+.vocab-item{padding:12px;border:1px solid var(--border);border-radius:10px;background:#fafbfc}
+.vocab-item .vocab-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.vocab-item .word{font-size:16px;font-weight:700;color:var(--primary)}
+.vocab-item .phonetic{color:var(--text-muted);font-size:12px;font-family:"Lucida Console",monospace}
+.vocab-item .pos{background:var(--primary-light);color:var(--primary);padding:1px 6px;border-radius:4px;font-size:11px;font-weight:500}
+.vocab-item .meaning{font-size:13px;color:#374151;line-height:1.5}
+.vocab-item .tts-btn{margin-left:auto;background:var(--primary-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--primary);font-size:14px;display:flex;align-items:center;justify-content:center}
+.vocab-item .tts-btn:hover{background:var(--primary);color:#fff}
+
+/* Quiz */
+.quiz-item{margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)}
+.quiz-item:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+.quiz-q{font-weight:600;margin-bottom:10px;font-size:14px;line-height:1.6}
+.quiz-options{display:flex;flex-direction:column;gap:8px}
+.quiz-opt{padding:10px 14px;border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all .15s;font-size:13px;background:#fff;text-align:left}
+.quiz-opt:hover:not(.disabled){border-color:var(--primary);background:var(--primary-light)}
+.quiz-opt.correct{border-color:var(--success);background:#d1fae5;color:#065f46}
+.quiz-opt.wrong{border-color:var(--danger);background:#fee2e2;color:#991b1b}
+.quiz-opt.disabled{cursor:default}
+.quiz-explain{margin-top:10px;padding:10px 12px;background:#fef9c3;border-radius:8px;font-size:12px;color:#854d0e;display:none}
+.quiz-explain.show{display:block}
+.quiz-score{text-align:center;padding:16px;color:var(--text-muted);font-size:13px}
+.quiz-score strong{color:var(--primary);font-size:18px}
+
+/* Footer tips */
+.footer-tip{text-align:center;color:var(--text-muted);font-size:11px;margin-top:16px;padding:0 16px}
+
+/* Hide scrollbar for mobile */
+@media(max-width:600px){
+  .container{padding:12px}
+  .card{padding:14px}
+  .header{padding:12px 14px}
+  .header h1{font-size:15px}
+  .wave-container{margin:6px -14px 0}
+}
+
+/* Loading overlay */
+.loading-mask{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;display:none;align-items:center;justify-content:center;flex-direction:column;color:#fff;gap:12px}
+.loading-mask.show{display:flex}
+.loading-mask .spinner-lg{width:40px;height:40px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite}
+.loading-mask p{margin:0;font-size:13px;max-width:240px;text-align:center}
+.loading-mask small{opacity:.7;font-size:11px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <span style="font-size:22px">🎧</span>
+  <h1>六级听力训练</h1>
+  <span class="badge">本地 Whisper</span>
+</div>
+
+<div class="container">
+
+  <!-- Step 1: 听力来源 -->
+  <div id="uploadArea" class="card">
+    <h2><span class="dot"></span>第 1 步 · 选择听力来源</h2>
+    <div class="mode-switch">
+      <button id="srcLocalBtn" class="active">📁 本地上传</button>
+      <button id="srcUrlBtn">🔗 在线链接</button>
+      <button id="srcRssBtn">📻 订阅源</button>
+    </div>
+
+    <!-- 本地上传 -->
+    <div id="srcLocal" class="src-panel active">
+      <label class="upload-zone" id="uploadZone">
+        <input type="file" id="fileInput" accept="audio/*" />
+        <div class="icon">📁</div>
+        <p><strong>点击选择</strong> 或拖拽 MP3 文件到此处</p>
+        <small style="color:var(--text-muted)">音频仅在浏览器本地处理，不会上传到任何服务器</small>
+      </label>
+    </div>
+
+    <!-- 在线链接 -->
+    <div id="srcUrl" class="src-panel">
+      <div class="api-row">
+        <input type="text" id="audioUrlInput" placeholder="粘贴音频直链，如 https://xxx.com/a.mp3" />
+        <button class="btn btn-primary" id="loadUrlBtn">加载</button>
+      </div>
+      <div class="hint">
+        支持 mp3 / m4a / wav 直链。若站点禁止跨域读取，会自动尝试公共 CORS 代理；全部失败时会给出「仅播放」模式，可先试听再手动下载上传转写。
+      </div>
+      <details class="adv">
+        <summary>高级：自定义 CORS 代理</summary>
+        <input type="text" id="customProxyInput" placeholder="https://your-proxy/?url={url}" style="margin-top:8px;width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#f9fafb" />
+        <div class="hint" style="margin-top:6px">用 <code>{url}</code> 占位；不写占位符则自动拼接到末尾</div>
+      </details>
+    </div>
+
+    <!-- 订阅源 -->
+    <div id="srcRss" class="src-panel">
+      <div class="api-row">
+        <select id="rssPreset">
+          <option value="">选择预置听力源…</option>
+          <option value="https://podcasts.files.bbci.co.uk/p02pc9tn.rss">BBC 6 Minute English</option>
+          <option value="https://feeds.megaphone.fm/TED">TED Talks Daily</option>
+        </select>
+      </div>
+      <div class="api-row">
+        <input type="text" id="rssUrlInput" placeholder="或粘贴任意播客 RSS 地址" />
+        <button class="btn btn-primary" id="loadRssBtn">获取</button>
+      </div>
+      <div class="hint">从播客 RSS 中读取最新音频条目，点击即可加载。部分海外源需要网络环境支持。</div>
+      <div id="rssList" class="rss-list"></div>
+    </div>
+  </div>
+
+  <!-- Step 2: AI Config & Process -->
+  <div id="apiArea" class="card" style="display:none">
+    <h2><span class="dot"></span>第 2 步 · AI 接口配置</h2>
+    <div class="mode-switch">
+      <button id="modeProxyBtn" class="active">自建代理（Vercel）</button>
+      <button id="modeDirectBtn">直连豆包方舟</button>
+    </div>
+
+    <!-- 代理模式：走 /api/chat，Key 存在 Vercel -->
+    <div id="modeProxy" style="display:block">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+        你的 Vercel 代理接口地址，例如：<code>https://ai-proxy-xxx.vercel.app/api/chat</code><br/>
+        Key 不暴露前端，安全推荐
+      </div>
+      <div class="api-row">
+        <input type="text" id="proxyUrlInput" placeholder="https://ai-proxy-xxx.vercel.app/api/chat" />
+        <button class="btn btn-primary" id="saveConfigBtn">保存</button>
+      </div>
+    </div>
+
+    <!-- 直连模式：豆包方舟 -->
+    <div id="modeDirect" style="display:none">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+        直接调用豆包方舟 API（Key 保存在浏览器 localStorage，仅本机可见）
+      </div>
+      <div class="api-row">
+        <input type="password" id="apiKeyInput" placeholder="ARK API Key，如 sk-..." />
+      </div>
+      <div class="api-row">
+        <input type="text" id="apiEndpointInput" placeholder="Endpoint ID，如 ep-2025..." />
+      </div>
+      <button class="btn btn-primary btn-block" id="saveKeyBtn">保存直连配置</button>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn btn-primary" id="transcribeBtn">① Whisper 语音转写</button>
+      <button class="btn btn-accent" id="vocabBtn" disabled>② AI 提取生词</button>
+      <button class="btn btn-secondary" id="quizBtn" disabled>③ 生成听力测验</button>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div id="statusBar" class="status-bar">
+    <div class="spinner"></div>
+    <span id="statusText">准备中...</span>
+  </div>
+
+  <!-- WaveSurfer + Segments (精听区) -->
+  <div id="playerArea" style="display:none">
+    <div class="card">
+      <h2><span class="dot"></span>分句精听</h2>
+      <div class="wave-container">
+        <div id="waveform" class="waveform"></div>
+      </div>
+      <div class="wave-controls">
+        <button id="playPauseBtn" class="btn btn-secondary">▶ 播放</button>
+        <span class="time-display"><span id="curTime">0:00</span> / <span id="totTime">0:00</span></span>
+        <select id="speedSelect" title="播放倍速">
+          <option value="0.5">0.5x</option>
+          <option value="0.75">0.75x</option>
+          <option value="1" selected>1.0x</option>
+          <option value="1.25">1.25x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2.0x</option>
+        </select>
+        <button id="stopBtn" class="btn btn-secondary">■ 停止</button>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs" id="mainTabs">
+      <button class="tab active" data-tab="seg">📝 分句字幕</button>
+      <button class="tab" data-tab="vocab">📖 词汇练习</button>
+      <button class="tab" data-tab="quiz">❓ 听力测验</button>
+    </div>
+
+    <!-- 分句字幕 -->
+    <div id="tab-seg" class="tab-content active">
+      <div class="card" style="margin-bottom:0">
+        <div id="segList" class="seg-list"></div>
+      </div>
+    </div>
+
+    <!-- 词汇练习 -->
+    <div id="tab-vocab" class="tab-content">
+      <div class="card" style="margin-bottom:0">
+        <div id="vocabArea">
+          <div class="vocab-empty">
+            点击上方 <strong>② AI 提取生词</strong> 按钮自动筛选六级核心词汇
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 测验 -->
+    <div id="tab-quiz" class="tab-content">
+      <div class="card" style="margin-bottom:0">
+        <div id="quizArea">
+          <div class="vocab-empty">
+            完成转写后，点击 <strong>③ 生成听力测验</strong> 按钮由 AI 出题
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="footer-tip">
+    支持本地文件 / 在线链接 / 播客 RSS · Whisper 转写在浏览器本地完成 · AI 调用走自建代理或豆包方舟
+  </p>
+</div>
+
+<!-- Loading mask -->
+<div id="loadingMask" class="loading-mask">
+  <div class="spinner-lg"></div>
+  <p id="loadingText">加载模型中...</p>
+  <small id="loadingSub">首次加载 Whisper 需从 CDN 下载 ~70MB 模型</small>
+</div>
+
+<script>
+/* =========================================================
+   Global state
+   ========================================================= */
+const state = {
+  audioBlob: null,
+  audioUrl: null,
+  segments: [],      // [{start, end, text}]
+  fullText: '',
+  words: [],         // AI extracted
+  quiz: [],          // AI generated quiz
+  wavesurfer: null,
+  loopingSegIdx: -1,
+  pipeline: null,
+  // AI 配置：两种模式
+  aiMode: 'proxy',              // 'proxy' | 'direct'
+  proxyUrl: '',                 // Vercel 代理 URL
+  arkApiKey: '',                // 直连豆包
+  arkEndpoint: '',              // 直连豆包 endpoint
+  customProxy: '',              // 自定义 CORS 代理（音频跨域用）
+  audioName: '',                // 当前音频名称
+};
+
+const LS_AI_CFG = 'listen_train_ai_config';
+
+/* =========================================================
+   Utility
+   ========================================================= */
+function $(id){ return document.getElementById(id); }
+function fmtTime(sec){
+  if(!isFinite(sec)) return '0:00';
+  const m = Math.floor(sec/60);
+  const s = Math.floor(sec%60);
+  return m + ':' + (s<10?'0':'') + s;
+}
+function showStatus(text, type=''){
+  const bar = $('statusBar');
+  bar.className = 'status-bar show ' + type;
+  $('statusText').textContent = text;
+}
+function hideStatus(){
+  $('statusBar').className = 'status-bar';
+}
+function showLoading(text, sub=''){
+  $('loadingMask').classList.add('show');
+  $('loadingText').textContent = text;
+  $('loadingSub').textContent = sub;
+}
+function hideLoading(){
+  $('loadingMask').classList.remove('show');
+}
+function setBtnLoading(btn, loading){
+  if(loading){ btn.disabled = true; btn.dataset.orig = btn.textContent; btn.textContent = '处理中...'; }
+  else{ btn.disabled = false; btn.textContent = btn.dataset.orig || btn.textContent; }
+}
+
+/* =========================================================
+   Source: 本地 / 在线链接 / RSS
+   ========================================================= */
+const uploadZone = $('uploadZone');
+const fileInput = $('fileInput');
+uploadZone.addEventListener('click', ()=> fileInput.click());
+uploadZone.addEventListener('dragover', e=>{ e.preventDefault(); uploadZone.classList.add('active'); });
+uploadZone.addEventListener('dragleave', ()=> uploadZone.classList.remove('active'));
+uploadZone.addEventListener('drop', e=>{
+  e.preventDefault();
+  uploadZone.classList.remove('active');
+  if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e=>{
+  if(e.target.files[0]) handleFile(e.target.files[0]);
+});
+
+function handleFile(file){
+  if(!file.type.startsWith('audio') && !/\.(mp3|m4a|wav|aac|ogg|flac)$/i.test(file.name||'')){
+    showStatus('请上传音频文件','error');
+    return;
+  }
+  loadAudioBlob(file, file.name);
+}
+
+function loadAudioBlob(blob, name){
+  state.audioBlob = blob;
+  state.audioName = name || 'audio';
+  if(state.audioUrl) URL.revokeObjectURL(state.audioUrl);
+  state.audioUrl = URL.createObjectURL(blob);
+  const po = $('playOnlyBox');
+  if(po) po.remove();
+  $('apiArea').style.display = 'block';
+  $('playerArea').style.display = 'block';
+  initWaveSurfer();
+  $('playerArea').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+/* ---------- 来源切换 ---------- */
+function switchSource(name){
+  const map = {local:'srcLocal', url:'srcUrl', rss:'srcRss'};
+  const btns = {local:'srcLocalBtn', url:'srcUrlBtn', rss:'srcRssBtn'};
+  Object.keys(map).forEach(k=>{
+    $(map[k]).classList.toggle('active', k===name);
+    $(btns[k]).classList.toggle('active', k===name);
+  });
+}
+$('srcLocalBtn').addEventListener('click', ()=> switchSource('local'));
+$('srcUrlBtn').addEventListener('click', ()=> switchSource('url'));
+$('srcRssBtn').addEventListener('click', ()=> switchSource('rss'));
+
+$('customProxyInput').addEventListener('input', e=>{
+  state.customProxy = e.target.value.trim();
+  saveAICfg();
+});
+
+/* ---------- 跨域抓取：直连 + 公共代理链 ---------- */
+const CORS_PROXIES = [
+  u => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
+];
+
+function buildProxyList(target){
+  const list = [target, ...CORS_PROXIES.map(fn=> fn(target))];
+  const cp = (state.customProxy||'').trim();
+  if(cp){
+    list.push(cp.includes('{url}') ? cp.replace('{url}', encodeURIComponent(target)) : cp + encodeURIComponent(target));
+  }
+  return list;
+}
+
+async function fetchWithTimeout(url, ms){
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=> ctrl.abort(), ms || 60000);
+  try{
+    return await fetch(url, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchBytesThroughProxies(target, onProgress){
+  const urls = buildProxyList(target);
+  let lastErr = null;
+  for(let i=0;i<urls.length;i++){
+    try{
+      if(onProgress) onProgress(i+1, urls.length);
+      const resp = await fetchWithTimeout(urls[i]);
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      const ab = await resp.arrayBuffer();
+      if(ab.byteLength < 2048) throw new Error('返回内容过小，疑似被拦截');
+      return ab;
+    }catch(err){
+      lastErr = err;
+    }
+  }
+  throw new Error(lastErr ? lastErr.message : '未知错误');
+}
+
+async function fetchTextThroughProxies(target, onProgress){
+  const urls = buildProxyList(target);
+  let lastErr = null;
+  for(let i=0;i<urls.length;i++){
+    try{
+      if(onProgress) onProgress(i+1, urls.length);
+      const resp = await fetchWithTimeout(urls[i], 30000);
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      const txt = await resp.text();
+      if(txt.length < 100) throw new Error('返回内容过短');
+      return txt;
+    }catch(err){ lastErr = err; }
+  }
+  throw new Error(lastErr ? lastErr.message : '未知错误');
+}
+
+function guessAudioType(url){
+  const m = (url||'').toLowerCase().match(/\.(mp3|m4a|wav|aac|ogg|flac)(\?|$)/);
+  const map = {mp3:'audio/mpeg', m4a:'audio/mp4', wav:'audio/wav', aac:'audio/aac', ogg:'audio/ogg', flac:'audio/flac'};
+  return (m && map[m[1]]) || 'audio/mpeg';
+}
+
+async function loadFromUrl(raw){
+  let url = (raw||'').trim();
+  if(!url) return showStatus('请先填写音频链接','warn');
+  if(!/^https?:\/\//i.test(url)) url = 'https://' + url;
+
+  showLoading('获取在线音频...', '若站点限制跨域，会自动切换代理通道');
+  showStatus('正在获取音频...');
+  try{
+    const ab = await fetchBytesThroughProxies(url, (i,n)=> showStatus(`正在获取音频（通道 ${i}/${n}）...`));
+    hideLoading();
+    const blob = new Blob([ab], { type: guessAudioType(url) });
+    let name = 'online-audio';
+    try{ name = decodeURIComponent(url.split('/').pop().split('?')[0]) || name; }catch(e){}
+    loadAudioBlob(blob, name);
+    showStatus(`在线音频已加载（${(ab.byteLength/1024/1024).toFixed(1)} MB）`, 'success');
+  }catch(err){
+    hideLoading();
+    renderPlayOnly(url);
+    showStatus('无法读取音频数据：' + (err.message||err) + '，已切换为仅播放模式', 'error');
+  }
+}
+
+/* 抓不到字节时：先让用户试听，提示手动下载后本地转写 */
+function renderPlayOnly(url){
+  state.audioBlob = null;
+  $('apiArea').style.display = 'block';
+  $('playerArea').style.display = 'block';
+  const wrap = $('playerArea');
+  let box = $('playOnlyBox');
+  if(!box){
+    box = document.createElement('div');
+    box.id = 'playOnlyBox';
+    box.className = 'card';
+    wrap.insertBefore(box, wrap.firstChild);
+  }
+  box.innerHTML = `
+    <h2><span class="dot"></span>仅播放模式</h2>
+    <div class="player-only">
+      <audio controls preload="metadata" src="${escapeHtml(url).replace(/"/g,'&quot;')}"></audio>
+      <div class="hint">该音频站点禁止跨域读取，浏览器无法读取音频数据做本地转写。<br/>
+      可先试听，确认内容合适后用浏览器下载该音频，再切到「本地上传」转写。</div>
+    </div>`;
+  box.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+$('loadUrlBtn').addEventListener('click', ()=> loadFromUrl($('audioUrlInput').value));
+
+/* ---------- RSS 播客源 ---------- */
+$('rssPreset').addEventListener('change', e=>{
+  if(e.target.value){ $('rssUrlInput').value = e.target.value; loadRss(); }
+});
+
+function parseRss(xmlText){
+  const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+  if(doc.querySelector('parsererror')) throw new Error('RSS 格式解析失败');
+  const nodes = [...doc.querySelectorAll('item'), ...doc.querySelectorAll('entry')];
+  const items = [];
+  nodes.forEach(n=>{
+    let audio = '';
+    const enc = n.querySelector('enclosure');
+    if(enc) audio = enc.getAttribute('url') || '';
+    if(!audio){
+      const links = [...n.querySelectorAll('link')];
+      const cand = links.find(l=> /audio|enclosure/i.test(l.getAttribute('rel')||''));
+      if(cand) audio = cand.getAttribute('href') || '';
+    }
+    if(!audio || !/\.(mp3|m4a|wav|aac|ogg)(\?|$)/i.test(audio)) return;
+    const title = (n.querySelector('title')?.textContent || '未命名').trim();
+    const dateRaw = n.querySelector('pubDate')?.textContent || n.querySelector('published')?.textContent || '';
+    const date = dateRaw ? new Date(dateRaw) : null;
+    items.push({ title, audio, date: date && !isNaN(date) ? date.toLocaleDateString('zh-CN') : '' });
+  });
+  return items.slice(0, 30);
+}
+
+async function loadRss(){
+  const url = ($('rssUrlInput').value || '').trim();
+  if(!url) return showStatus('请选择或填写 RSS 地址','warn');
+  const list = $('rssList');
+  list.innerHTML = '<div class="hint" style="padding:10px">正在读取订阅源…</div>';
+  showStatus('正在读取 RSS…');
+  try{
+    const xml = await fetchTextThroughProxies(url);
+    const items = parseRss(xml);
+    if(!items.length) throw new Error('未在订阅源中找到音频条目');
+    list.innerHTML = items.map((it, i)=> `
+      <div class="rss-item" data-i="${i}">
+        <div class="rss-title">${escapeHtml(it.title)}</div>
+        <div class="rss-meta">${it.date ? escapeHtml(it.date) + ' · ' : ''}点击加载</div>
+      </div>`).join('');
+    list.querySelectorAll('.rss-item').forEach(el=>{
+      el.addEventListener('click', ()=> loadFromUrl(items[+el.dataset.i].audio));
+    });
+    showStatus(`读取到 ${items.length} 条音频`, 'success');
+  }catch(err){
+    list.innerHTML = `<div class="hint" style="padding:10px;color:var(--danger)">读取失败：${escapeHtml(err.message||String(err))}</div>`;
+    showStatus('读取 RSS 失败：' + (err.message||err), 'error');
+  }
+}
+$('loadRssBtn').addEventListener('click', loadRss);
+
+/* =========================================================
+   WaveSurfer
+   ========================================================= */
+async function initWaveSurfer(){
+  await window.libsReady;
+  if(!window.WaveSurfer){
+    showStatus('波形库加载失败，请检查网络后刷新', 'error');
+    return;
+  }
+  if(state.wavesurfer){ try{ state.wavesurfer.destroy(); }catch(e){} }
+  state.wavesurfer = WaveSurfer.create({
+    container: '#waveform',
+    waveColor: '#2a6df4',
+    progressColor: '#1e40af',
+    cursorColor: '#ff6b35',
+    cursorWidth: 2,
+    height: 80,
+    barWidth: 2,
+    barGap: 1,
+    barRadius: 2,
+    normalize: true,
+  });
+  state.wavesurfer.load(state.audioUrl);
+  state.wavesurfer.on('ready', ()=>{
+    $('totTime').textContent = fmtTime(state.wavesurfer.getDuration());
+  });
+  state.wavesurfer.on('timeupdate', cur=>{
+    $('curTime').textContent = fmtTime(cur);
+    // sync segment active highlight
+    const idx = state.segments.findIndex(s=> cur>=s.start && cur<s.end);
+    document.querySelectorAll('.seg-item').forEach((el,i)=>{
+      el.classList.toggle('active', i===idx);
+    });
+    // auto loop
+    if(state.loopingSegIdx>=0){
+      const seg = state.segments[state.loopingSegIdx];
+      if(cur >= seg.end){
+        state.wavesurfer.seekTo(seg.start / state.wavesurfer.getDuration());
+      }
+    }
+  });
+  state.wavesurfer.on('finish', ()=>{
+    state.loopingSegIdx = -1;
+    document.querySelectorAll('.seg-item').forEach(el=> el.classList.remove('looping'));
+  });
+}
+
+$('playPauseBtn').addEventListener('click', ()=>{
+  if(!state.wavesurfer) return;
+  state.wavesurfer.playPause();
+  $('playPauseBtn').textContent = state.wavesurfer.isPlaying() ? '⏸ 暂停' : '▶ 播放';
+});
+$('stopBtn').addEventListener('click', ()=>{
+  state.loopingSegIdx = -1;
+  document.querySelectorAll('.seg-item').forEach(el=> el.classList.remove('looping'));
+  state.wavesurfer && state.wavesurfer.stop();
+  $('playPauseBtn').textContent = '▶ 播放';
+});
+$('speedSelect').addEventListener('change', e=>{
+  state.wavesurfer && state.wavesurfer.setPlaybackRate(parseFloat(e.target.value));
+});
+
+/* =========================================================
+   AI Config handling (模式切换 + localStorage)
+   ========================================================= */
+function saveAICfg(){
+  localStorage.setItem(LS_AI_CFG, JSON.stringify({
+    aiMode: state.aiMode,
+    proxyUrl: state.proxyUrl,
+    arkApiKey: state.arkApiKey,
+    arkEndpoint: state.arkEndpoint,
+    customProxy: state.customProxy,
+  }));
+}
+function loadAICfg(){
+  try{
+    const c = JSON.parse(localStorage.getItem(LS_AI_CFG)||'{}');
+    Object.assign(state, c);
+    state.aiMode = c.aiMode || 'proxy';
+  }catch(e){}
+}
+function switchAIMode(mode){
+  state.aiMode = mode;
+  $('modeProxyBtn').classList.toggle('active', mode==='proxy');
+  $('modeDirectBtn').classList.toggle('active', mode==='direct');
+  $('modeProxy').style.display = mode==='proxy' ? 'block' : 'none';
+  $('modeDirect').style.display = mode==='direct' ? 'block' : 'none';
+  saveAICfg();
+}
+
+$('modeProxyBtn').addEventListener('click', ()=> switchAIMode('proxy'));
+$('modeDirectBtn').addEventListener('click', ()=> switchAIMode('direct'));
+
+$('proxyUrlInput').addEventListener('input', e=> { state.proxyUrl = e.target.value.trim(); });
+$('apiKeyInput').addEventListener('input', e=> { state.arkApiKey = e.target.value.trim(); });
+$('apiEndpointInput').addEventListener('input', e=> { state.arkEndpoint = e.target.value.trim(); });
+
+$('saveConfigBtn').addEventListener('click', ()=>{
+  if(!state.proxyUrl){ showStatus('请填写代理 URL','warn'); return; }
+  saveAICfg();
+  showStatus('代理地址已保存','success');
+  setTimeout(hideStatus, 2000);
+});
+$('saveKeyBtn').addEventListener('click', ()=>{
+  if(!state.arkApiKey){ showStatus('请填写 API Key','warn'); return; }
+  saveAICfg();
+  showStatus('直连配置已保存','success');
+  setTimeout(hideStatus, 2000);
+});
+
+/* =========================================================
+   Whisper Transcription (single-thread, no SharedArrayBuffer)
+   ========================================================= */
+async function loadWhisper(){
+  showLoading('加载 Whisper 模型中...', '首次使用需要下载约 70MB，请耐心等待');
+  showStatus('加载 Whisper 模型...');
+  try{
+    await window.libsReady;
+    if(!window.transformers){ throw new Error('Transformers.js 未加载，请检查网络'); }
+    const { pipeline, env } = window.transformers;
+    // CRITICAL: single-thread WASM - avoid SharedArrayBuffer / cross-origin header issues on GitHub Pages
+    env.allowLocalModels = false;
+    env.useBrowserCache = true;
+    // 单线程：必须在 onnx 后端上设置，之前写成 env.backends = [...] 是无效的
+    try{
+      if(!env.backends.onnx) env.backends.onnx = {};
+      if(!env.backends.onnx.wasm) env.backends.onnx.wasm = {};
+      env.backends.onnx.wasm.numThreads = 1;
+      env.backends.onnx.wasm.proxy = false;
+    }catch(e){ console.warn('设置单线程失败', e); }
+
+    state.pipeline = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base', {
+      quantized: true,
+    });
+    hideLoading();
+    showStatus('模型加载完成，开始转写...');
+  }catch(err){
+    hideLoading();
+    console.error(err);
+    showStatus('模型加载失败: ' + (err.message||err), 'error');
+  }
+}
+
+async function runTranscribe(){
+  if(!state.audioBlob){ showStatus('请先上传音频，或加载可跨域读取的在线音频','warn'); return; }
+  setBtnLoading($('transcribeBtn'), true);
+  try{
+    if(!state.pipeline){
+      await loadWhisper();
+    }
+    showLoading('Whisper 转写中...', '音频越长耗时越久，请耐心等待');
+    showStatus('正在转写...');
+
+    // Whisper 需要 16kHz 单声道 Float32Array，不能直接喂 ArrayBuffer
+    const tf = window.transformers;
+    const tmpUrl = URL.createObjectURL(state.audioBlob);
+    let waveform;
+    try{
+      waveform = await tf.read_audio(tmpUrl, 16000);
+    }finally{
+      URL.revokeObjectURL(tmpUrl);
+    }
+    const result = await state.pipeline(waveform, {
+      language: 'english',
+      task: 'transcribe',
+      return_timestamps: true,
+      chunk_length_s: 30,
+      stride_length_s: 5,
+    });
+
+    hideLoading();
+    state.fullText = (result.text || '').trim();
+
+    // Build segments
+    const chunks = result.chunks || [];
+    state.segments = chunks.map((c, i)=> ({
+      start: c.timestamp[0],
+      end: c.timestamp[1],
+      text: (c.text||'').trim(),
+      idx: i,
+    })).filter(s => s.text.length>0);
+
+    renderSegments();
+    showStatus(`转写完成，共 ${state.segments.length} 句 · ${Math.round(state.fullText.length)} 字符`, 'success');
+    $('vocabBtn').disabled = !state.fullText;
+    $('quizBtn').disabled = !state.fullText;
+  }catch(err){
+    hideLoading();
+    console.error(err);
+    showStatus('转写失败: ' + (err.message||err), 'error');
+  }finally{
+    setBtnLoading($('transcribeBtn'), false);
+  }
+}
+
+/* =========================================================
+   Render segments
+   ========================================================= */
+function renderSegments(){
+  const list = $('segList');
+  list.innerHTML = '';
+  state.segments.forEach((seg, i)=>{
+    const item = document.createElement('div');
+    item.className = 'seg-item';
+    item.innerHTML = `
+      <span class="seg-time">${fmtTime(seg.start)}</span>
+      <span class="seg-text">${escapeHtml(seg.text)}</span>
+      <button class="seg-loop" title="单句循环">↺</button>
+    `;
+    item.addEventListener('click', e=>{
+      if(e.target.classList.contains('seg-loop')){
+        // toggle loop for this segment
+        if(state.loopingSegIdx === i){
+          state.loopingSegIdx = -1;
+          item.classList.remove('looping');
+        } else {
+          state.loopingSegIdx = i;
+          document.querySelectorAll('.seg-item').forEach(el=> el.classList.remove('looping'));
+          item.classList.add('looping');
+          state.wavesurfer.seekTo(seg.start / state.wavesurfer.getDuration());
+          state.wavesurfer.play();
+        }
+        return;
+      }
+      state.wavesurfer.seekTo(seg.start / state.wavesurfer.getDuration());
+      state.wavesurfer.play();
+      $('playPauseBtn').textContent = '⏸ 暂停';
+    });
+    list.appendChild(item);
+  });
+}
+function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+/* =========================================================
+   AI API call — 支持代理模式（自建 Vercel）和直连豆包方舟
+   代理模式只需 messages，后端强制 model/max_tokens/key
+   直连模式前端要带 Bearer Key + Endpoint ID
+   ========================================================= */
+async function callAI(messages){
+  let url, headers, body;
+
+  if(state.aiMode === 'proxy'){
+    if(!state.proxyUrl) throw new Error('请先在「第 2 步」填入代理 URL');
+    url = state.proxyUrl;
+    headers = { 'Content-Type': 'application/json' };
+    // 代理只透传 messages，model 和 key 由后端强制
+    body = JSON.stringify({ messages });
+  } else {
+    if(!state.arkApiKey) throw new Error('请先输入豆包 API Key');
+    if(!state.arkEndpoint) throw new Error('请输入 Endpoint ID');
+    url = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
+    headers = {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + state.arkApiKey,
+    };
+    body = JSON.stringify({ model: state.arkEndpoint, messages, temperature: 0.3 });
+  }
+
+  let resp;
+  try{
+    resp = await fetch(url, { method:'POST', headers, body });
+  }catch(e){
+    // 典型：CORS / 代理未部署 / 域名填错
+    throw new Error('网络错误（检查代理地址是否正确，Vercel 是否部署完成）: ' + (e.message||String(e)));
+  }
+
+  const text = await resp.text().catch(()=>'');
+  let data;
+  try{ data = JSON.parse(text); }catch(e){
+    // 非 JSON：多半是 Vercel 返回 HTML 错误页
+    throw new Error(`代理返回非 JSON (HTTP ${resp.status})：${text.slice(0,120)}`);
+  }
+  if(!resp.ok){
+    const errMsg = data.error || data.message || text.slice(0,200);
+    throw new Error(`API 错误 ${resp.status}: ${errMsg}`);
+  }
+
+  // 代理透传 DeepSeek 原生 / 豆包方舟 —— 路径一致
+  const content = data.choices?.[0]?.message?.content;
+  if(typeof content !== 'string' || !content.length){
+    throw new Error('AI 未返回有效内容：' + JSON.stringify(data).slice(0,200));
+  }
+  return content;
+}
+
+function extractJson(text){
+  // try direct JSON parse
+  try{ return JSON.parse(text); }catch(e){}
+  // try extract ```json ... ``` block
+  const m1 = text.match(/```json\s*([\s\S]*?)```/i);
+  if(m1){ try{ return JSON.parse(m1[1]); }catch(e){} }
+  // try extract first [ ... ] or { ... } block
+  const m2 = text.match(/\[[\s\S]*\]/);
+  if(m2){ try{ return JSON.parse(m2[0]); }catch(e){} }
+  const m3 = text.match(/\{[\s\S]*\}/);
+  if(m3){ try{ return JSON.parse(m3[0]); }catch(e){} }
+  throw new Error('无法解析 AI 返回的 JSON');
+}
+
+/* =========================================================
+   Vocabulary extraction
+   ========================================================= */
+async function extractVocab(){
+  if(!state.fullText){ showStatus('请先完成语音转写','warn'); return; }
+  setBtnLoading($('vocabBtn'), true);
+  showStatus('AI 提取生词中...');
+  try{
+    const prompt = `你是 CET-6 英语听力专家。请从下面这段听力原文中筛选出适合六级听力训练的核心词汇和短语。
+
+筛选规则：
+1. 过滤常见基础词：a/an/the/is/are/was/were/be/been/being/have/has/had/do/does/did/will/would/shall/should/can/could/may/might/must/of/in/on/at/to/for/with/by/from/as/into/through/during/before/after/above/below/between/and/or/but/if/when/where/how/what/which/who/whom/this/that/these/those/i/you/he/she/it/we/they/me/him/her/us/them/my/your/his/its/our/their/s/ing/ed/es 等
+2. 优先提取：CET-6 核心单词、听力短语搭配、常见连读组合、同义替换高频词
+3. 每个词条包含音标（美式 IPA）、词性、中文释义（简短）
+4. 提取 10~20 个
+
+原文：
+"""
+${state.fullText.slice(0, 4000)}
+"""
+
+请严格返回 JSON 数组，不要输出任何其他文字，格式如下：
+[
+  {"word":"单词","phonetic":"音标","pos":"词性","meaning":"中文释义"},
+  ...
+]`;
+
+    const raw = await callAI([
+      {role:'system', content:'你是严谨的 CET-6 词汇专家，只输出 JSON 数组。'},
+      {role:'user', content: prompt},
+    ]);
+    const data = extractJson(raw);
+    if(!Array.isArray(data)) throw new Error('返回格式不是数组');
+    state.words = data;
+    renderVocab();
+    showStatus(`提取到 ${data.length} 个生词`, 'success');
+    // switch to vocab tab
+    switchTab('vocab');
+  }catch(err){
+    console.error(err);
+    showStatus('生词提取失败: ' + (err.message||err), 'error');
+  }finally{
+    setBtnLoading($('vocabBtn'), false);
+  }
+}
+
+function renderVocab(){
+  const area = $('vocabArea');
+  if(!state.words.length){
+    area.innerHTML = '<div class="vocab-empty">暂未提取到生词</div>';
+    return;
+  }
+  area.innerHTML = `<div class="vocab-list">${
+    state.words.map(w=> `
+      <div class="vocab-item">
+        <div class="vocab-head">
+          <span class="word">${escapeHtml(w.word||'')}</span>
+          ${w.phonetic?`<span class="phonetic">/${escapeHtml(w.phonetic)}/</span>`:''}
+          ${w.pos?`<span class="pos">${escapeHtml(w.pos)}</span>`:''}
+          <button class="tts-btn" title="朗读" onclick="speakWord('${escapeHtml(w.word||'').replace(/'/g,"\\'")}')">🔊</button>
+        </div>
+        ${w.meaning?`<div class="meaning">${escapeHtml(w.meaning)}</div>`:''}
+      </div>
+    `).join('')
+  }</div>`;
+}
+
+function speakWord(w){
+  if(!('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(w);
+  u.lang = 'en-US';
+  u.rate = 0.9;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(u);
+}
+
+/* =========================================================
+   Quiz generation
+   ========================================================= */
+async function generateQuiz(){
+  if(!state.fullText){ showStatus('请先完成语音转写','warn'); return; }
+  setBtnLoading($('quizBtn'), true);
+  showStatus('AI 生成测验题中...');
+  try{
+    const prompt = `你是 CET-6 听力出题专家。请根据下面这段六级听力原文，生成 3~4 道单项选择题。
+
+出题规则：
+1. 每道题的题干是一个不完整句子或简短问句，选项中只有 1 个正确答案可从原文推断得出
+2. 干扰项要有迷惑性，长度和风格接近正确答案
+3. 题干语言贴近六级听力真题风格
+4. 每题附带简短解析，说明正确答案依据
+
+原文：
+"""
+${state.fullText.slice(0, 4000)}
+"""
+
+请严格返回 JSON 数组，不要输出任何其他文字，格式如下：
+[
+  {
+    "question": "题干",
+    "options": ["A选项","B选项","C选项","D选项"],
+    "answer": 0,
+    "explanation": "解析"
+  },
+  ...
+]
+其中 answer 是 0 到 3 的数字，对应 options 数组下标。`;
+
+    const raw = await callAI([
+      {role:'system', content:'你是 CET-6 听力出题专家，只输出 JSON 数组。'},
+      {role:'user', content: prompt},
+    ]);
+    const data = extractJson(raw);
+    if(!Array.isArray(data)) throw new Error('返回格式不是数组');
+    state.quiz = data;
+    renderQuiz();
+    showStatus(`生成 ${data.length} 道测验题`, 'success');
+    switchTab('quiz');
+  }catch(err){
+    console.error(err);
+    showStatus('测验生成失败: ' + (err.message||err), 'error');
+  }finally{
+    setBtnLoading($('quizBtn'), false);
+  }
+}
+
+function renderQuiz(){
+  const area = $('quizArea');
+  if(!state.quiz.length){
+    area.innerHTML = '<div class="vocab-empty">暂无题目</div>';
+    return;
+  }
+  area.innerHTML = state.quiz.map((q, qi)=> `
+    <div class="quiz-item" data-qi="${qi}">
+      <div class="quiz-q">${qi+1}. ${escapeHtml(q.question||'')}</div>
+      <div class="quiz-options">
+        ${(q.options||[]).map((opt, oi)=> `
+          <button class="quiz-opt" data-oi="${oi}" onclick="pickOption(${qi},${oi})">
+            ${'ABCD'[oi]}. ${escapeHtml(opt||'')}
+          </button>
+        `).join('')}
+      </div>
+      <div class="quiz-explain">${escapeHtml(q.explanation||'')}</div>
+    </div>
+  `).join('') + `<div class="quiz-score" id="quizScore"></div>`;
+  window._quizAnswered = 0;
+  window._quizCorrect = 0;
+}
+
+window.pickOption = function(qi, oi){
+  const q = state.quiz[qi];
+  const item = document.querySelector(`.quiz-item[data-qi="${qi}"]`);
+  const correct = (q.answer===0||q.answer===1||q.answer===2||q.answer===3) ? q.answer :
+    (()=>{ const m = String(q.answer).toUpperCase(); return 'ABCD'.indexOf(m); })();
+  const opts = item.querySelectorAll('.quiz-opt');
+  opts.forEach((el,i)=>{
+    el.classList.add('disabled');
+    if(i===correct) el.classList.add('correct');
+    else if(i===oi && oi!==correct) el.classList.add('wrong');
+  });
+  const exp = item.querySelector('.quiz-explain');
+  if(exp) exp.classList.add('show');
+
+  if(!item.dataset.done){
+    item.dataset.done = '1';
+    window._quizAnswered = (window._quizAnswered||0) + 1;
+    if(oi===correct) window._quizCorrect = (window._quizCorrect||0) + 1;
+    const score = $('quizScore');
+    if(score){
+      score.innerHTML = `已答 ${window._quizAnswered}/${state.quiz.length} · 正确 <strong>${window._quizCorrect}</strong>`;
+    }
+  }
+};
+
+/* =========================================================
+   Tabs
+   ========================================================= */
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach(t=> t.classList.toggle('active', t.dataset.tab===name));
+  document.querySelectorAll('.tab-content').forEach(c=> c.classList.toggle('active', c.id==='tab-'+name));
+}
+document.querySelectorAll('.tab').forEach(t=> t.addEventListener('click', ()=> switchTab(t.dataset.tab)));
+
+/* =========================================================
+   Button wiring
+   ========================================================= */
+$('transcribeBtn').addEventListener('click', runTranscribe);
+$('vocabBtn').addEventListener('click', extractVocab);
+$('quizBtn').addEventListener('click', generateQuiz);
+
+/* =========================================================
+   Init
+   ========================================================= */
+document.addEventListener('DOMContentLoaded', ()=>{
+  loadAICfg();
+  // 回填 UI
+  switchAIMode(state.aiMode || 'proxy');
+  if(state.proxyUrl) $('proxyUrlInput').value = state.proxyUrl;
+  if(state.arkApiKey) $('apiKeyInput').value = state.arkApiKey;
+  if(state.arkEndpoint) $('apiEndpointInput').value = state.arkEndpoint;
+  if(state.customProxy) $('customProxyInput').value = state.customProxy;
+});
+</script>
+</body>
+</html>

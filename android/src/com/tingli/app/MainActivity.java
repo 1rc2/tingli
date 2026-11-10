@@ -20,6 +20,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URL;
+import java.util.HashMap;
+import java.util.Map;
 import javax.net.ssl.HttpsURLConnection;
 
 public class MainActivity extends Activity {
@@ -57,7 +59,12 @@ public class MainActivity extends Activity {
                 if (url.equals(LOCAL_ORIGIN) || url.equals(LOCAL_ORIGIN + "index.html")) {
                     try {
                         InputStream is = getAssets().open("index.html");
-                        return new WebResourceResponse("text/html", "utf-8", is);
+                        // 加 COOP/COEP 头启用 crossOriginIsolated → 让页面可用 SharedArrayBuffer，
+                        // 从而 Whisper 走多线程 WASM，转写提速（WebView 需 Chrome 92+）。
+                        Map<String, String> headers = new HashMap<>();
+                        headers.put("Cross-Origin-Opener-Policy", "same-origin");
+                        headers.put("Cross-Origin-Embedder-Policy", "require-corp");
+                        return new WebResourceResponse("text/html", "utf-8", 200, "OK", headers, is);
                     } catch (IOException e) {
                         return null;
                     }

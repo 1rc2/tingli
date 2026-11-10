@@ -359,8 +359,12 @@ body{min-height:100vh;padding-bottom:70px}
       <button class="btn btn-primary btn-block" id="saveKeyBtn">保存直连配置</button>
     </div>
 
-    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-primary" id="transcribeBtn">① Whisper 语音转写</button>
+      <select id="whisperModelSel" title="转写模型：tiny 更快，base 更准" style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;font-family:inherit;flex:1;min-width:150px">
+        <option value="Xenova/whisper-tiny">快速 tiny（更快）</option>
+        <option value="Xenova/whisper-base" selected>标准 base（更准）</option>
+      </select>
       <button class="btn btn-accent" id="vocabBtn" disabled>② AI 提取生词</button>
       <button class="btn btn-secondary" id="quizBtn" disabled>③ 生成听力测验</button>
     </div>
@@ -474,11 +478,14 @@ const state = {
   currentHistoryId: null,       // 当前正在学的历史记录 id
   segTranslations: {},          // { segIdx: 中文翻译 }
   blindMode: false,             // 盲听模式
+  whisperModel: 'Xenova/whisper-base',  // 转写模型（tiny 更快 / base 更准）
+  loadedModel: null,            // 当前已加载进内存的模型，用于检测切换
 };
 
 const LS_AI_CFG = 'listen_train_ai_config';
 const LS_VOCAB = 'listen_train_vocab_book';
 const LS_HISTORY = 'listen_train_history';
+const LS_WHISPER_MODEL = 'listen_train_whisper_model';
 
 // App 内（WebView 的 app.local 源 + 原生桥）区分于网页：Key 存 Android 侧、不回显
 const IS_APP = (location.host === 'app.local') && !!window.AndroidBridge;
@@ -994,10 +1001,12 @@ $('pasteKeyBtn').addEventListener('click', async ()=>{
 });
 
 /* =========================================================
-   Whisper Transcription (single-thread, no SharedArrayBuffer)
+   Whisper Transcription (multi-thread when crossOriginIsolated)
    ========================================================= */
 async function loadWhisper(){
-  showLoading('加载 Whisper 模型中...', '首次使用需要下载约 70MB，请耐心等待');
+  const modelId = state.whisperModel;
+  const isTiny = modelId.indexOf('tiny') >= 0;
+  showLoading('加载 Whisper 模型中...', isTiny ? '首次使用需下载约 39MB（快速模型），请耐心等待' : '首次使用需下载约 70MB（标准模型），请耐心等待');
   showStatus('加载 Whisper 模型...');
   // 国内优先走 hf-mirror 镜像，失败再回退官方 huggingface.co
   const hosts = ['https://hf-mirror.com', 'https://huggingface.co'];
@@ -1006,27 +1015,31 @@ async function loadWhisper(){
       await window.libsReady;
       if(!window.transformers){ throw new Error('Transformers.js 未加载，请检查网络'); }
       const { pipeline, env } = window.transformers;
-      // CRITICAL: single-thread WASM - avoid SharedArrayBuffer / cross-origin header issues on GitHub Pages
       env.allowLocalModels = false;
       env.useBrowserCache = true;
-      // 单线程：必须在 onnx 后端上设置，之前写成 env.backends = [...] 是无效的
+      // 线程数：仅当跨域隔离（App 端已加 COOP/COEP 头，可用 SharedArrayBuffer）时才多线程，
+      // 网页端（GitHub Pages 无 COOP/COEP）自动回退单线程，避免 WASM 报错。
+      const threads = (typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated)
+        ? Math.min(navigator.hardwareConcurrency || 4, 4)
+        : 1;
       try{
         if(!env.backends.onnx) env.backends.onnx = {};
         if(!env.backends.onnx.wasm) env.backends.onnx.wasm = {};
-        env.backends.onnx.wasm.numThreads = 1;
+        env.backends.onnx.wasm.numThreads = threads;
         env.backends.onnx.wasm.proxy = false;
-      }catch(e){ console.warn('设置单线程失败', e); }
+      }catch(e){ console.warn('设置线程数失败', e); }
 
       // 指定模型下载源（国内镜像优先）
       env.remoteHost = hosts[attempt];
       env.remotePathTemplate = '{model}/resolve/{revision}/';
       showStatus(`正在从 ${hosts[attempt]} 下载模型...`);
 
-      state.pipeline = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base', {
+      state.pipeline = await pipeline('automatic-speech-recognition', modelId, {
         quantized: true,
       });
+      state.loadedModel = modelId;
       hideLoading();
-      showStatus('模型加载完成，开始转写...');
+      showStatus(threads > 1 ? `模型加载完成（${threads} 线程加速），开始转写...` : '模型加载完成，开始转写...');
       return true;
     }catch(err){
       console.error('模型加载失败（源 ' + (attempt+1) + '/' + hosts.length + '）:', err);
@@ -1047,11 +1060,12 @@ async function runTranscribe(){
   if(!state.audioBlob){ showStatus('请先上传音频，或加载可跨域读取的在线音频','warn'); return; }
   setBtnLoading($('transcribeBtn'), true);
   try{
-    if(!state.pipeline){
+    if(!state.pipeline || state.loadedModel !== state.whisperModel){
+      state.pipeline = null;
       const ok = await loadWhisper();
       if(!ok || !state.pipeline){ return; }
     }
-    showLoading('Whisper 转写中...', '音频越长耗时越久，请耐心等待');
+    showLoading('Whisper 转写中...', '正在解码音频…');
     showStatus('正在转写...');
 
     // Whisper 需要 16kHz 单声道 Float32Array，不能直接喂 ArrayBuffer
@@ -1063,13 +1077,26 @@ async function runTranscribe(){
     }finally{
       URL.revokeObjectURL(tmpUrl);
     }
+
+    // 实时进度：计时 + 已处理片段数，避免长时间无反馈
+    let chunkCount = 0;
+    const t0 = Date.now();
+    const timer = setInterval(()=>{
+      const sec = Math.round((Date.now() - t0)/1000);
+      $('loadingSub').textContent = chunkCount > 0
+        ? `已用时 ${sec} 秒 · 已处理 ${chunkCount} 个音频片段`
+        : `已用时 ${sec} 秒`;
+    }, 1000);
+
     const result = await state.pipeline(waveform, {
       language: 'english',
       task: 'transcribe',
       return_timestamps: true,
       chunk_length_s: 30,
       stride_length_s: 5,
+      chunk_callback: ()=>{ chunkCount++; },
     });
+    clearInterval(timer);
 
     hideLoading();
     state.fullText = (result.text || '').trim();
@@ -1636,6 +1663,23 @@ document.querySelectorAll('.tab').forEach(t=> t.addEventListener('click', ()=> s
 $('transcribeBtn').addEventListener('click', runTranscribe);
 $('vocabBtn').addEventListener('click', extractVocab);
 $('quizBtn').addEventListener('click', generateQuiz);
+
+// Whisper 模型选择：tiny 更快 / base 更准，切换后下次转写自动重载对应模型
+const modelSel = $('whisperModelSel');
+const savedModel = loadJSON(LS_WHISPER_MODEL, 'Xenova/whisper-base');
+if(savedModel === 'Xenova/whisper-tiny' || savedModel === 'Xenova/whisper-base'){
+  state.whisperModel = savedModel;
+  modelSel.value = savedModel;
+}
+modelSel.addEventListener('change', ()=>{
+  state.whisperModel = modelSel.value;
+  saveJSON(LS_WHISPER_MODEL, modelSel.value);
+  if(state.pipeline && state.loadedModel !== state.whisperModel){
+    state.pipeline = null;
+    state.loadedModel = null;
+    showStatus('已切换模型，下次转写将重新加载', 'success');
+  }
+});
 
 // 学习辅助按钮
 $('blindModeBtn').addEventListener('click', toggleBlindMode);

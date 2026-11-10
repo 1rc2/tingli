@@ -1058,6 +1058,10 @@ async function loadWhisper(){
 
 async function runTranscribe(){
   if(!state.audioBlob){ showStatus('请先上传音频，或加载可跨域读取的在线音频','warn'); return; }
+  // App 端：优先走本地离线 sherpa-onnx 转写（不依赖 CDN / 模型下载）
+  if(IS_APP && window.AndroidBridge && typeof window.AndroidBridge.transcribeNative === 'function'){
+    return runTranscribeNative();
+  }
   setBtnLoading($('transcribeBtn'), true);
   try{
     if(!state.pipeline || state.loadedModel !== state.whisperModel){
@@ -1113,6 +1117,83 @@ async function runTranscribe(){
     renderSegments();
     pushHistory();
     showStatus(`转写完成，共 ${state.segments.length} 句 · ${Math.round(state.fullText.length)} 字符`, 'success');
+    $('vocabBtn').disabled = !state.fullText;
+    $('quizBtn').disabled = !state.fullText;
+  }catch(err){
+    hideLoading();
+    console.error(err);
+    showStatus('转写失败: ' + (err.message||err), 'error');
+  }finally{
+    setBtnLoading($('transcribeBtn'), false);
+  }
+}
+
+/* =========================================================
+   本地离线转写（App 端 sherpa-onnx，不依赖网络）
+   ========================================================= */
+function blobToBase64(blob){
+  return new Promise((resolve, reject)=>{
+    const r = new FileReader();
+    r.onload = ()=> resolve(String(r.result).split(',')[1]);
+    r.onerror = ()=> reject(new Error('音频读取失败'));
+    r.readAsDataURL(blob);
+  });
+}
+
+// 把完整文本按句末标点切分，时间戳按字符数比例在 [0, duration] 上分配
+function buildSegmentsFromText(text, duration){
+  if(!text) return [];
+  const dur = Math.max(duration || 1, 0.1);
+  const parts = [];
+  let buf = '';
+  for(const ch of text){
+    buf += ch;
+    if(ch === '.' || ch === '!' || ch === '?'){
+      const t = buf.trim();
+      if(t) parts.push(t);
+      buf = '';
+    }
+  }
+  const rest = buf.trim();
+  if(rest) parts.push(rest);
+  if(!parts.length) return [];
+
+  const total = parts.reduce((s,p)=> s + p.length, 0);
+  const segs = [];
+  let acc = 0;
+  parts.forEach((p)=>{
+    const start = acc / total * dur;
+    acc += p.length;
+    const end = acc / total * dur;
+    segs.push({ start, end, text: p, idx: segs.length });
+  });
+  return segs;
+}
+
+async function runTranscribeNative(){
+  setBtnLoading($('transcribeBtn'), true);
+  showLoading('本地 Whisper 转写中...', '使用内置模型离线识别，无需联网');
+  showStatus('正在解码音频...');
+  try{
+    const modelId = state.whisperModel.indexOf('tiny') >= 0 ? 'tiny' : 'base';
+    const b64 = await blobToBase64(state.audioBlob);
+
+    const result = await new Promise((resolve, reject)=>{
+      const id = 'nt' + Date.now() + '_' + Math.floor(Math.random()*1e6);
+      window.__onNativeTranscribe = (cid, r)=>{
+        if(cid !== id) return;
+        if(r && r.ok){ resolve(r); }
+        else reject(new Error((r && r.error) || '转写失败'));
+      };
+      window.AndroidBridge.transcribeNative(modelId, b64, id);
+    });
+
+    hideLoading();
+    state.fullText = (result.text || '').trim();
+    state.segments = buildSegmentsFromText(state.fullText, result.duration || 0);
+    renderSegments();
+    pushHistory();
+    showStatus(`转写完成，共 ${state.segments.length} 句 · ${Math.round(state.fullText.length)} 字符（本地离线）`, 'success');
     $('vocabBtn').disabled = !state.fullText;
     $('quizBtn').disabled = !state.fullText;
   }catch(err){

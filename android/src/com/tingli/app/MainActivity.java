@@ -29,6 +29,7 @@ public class MainActivity extends Activity {
     private static final String LOCAL_ORIGIN = "https://app.local/";
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
+    private WhisperEngine whisperEngine = new WhisperEngine();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -112,6 +113,35 @@ public class MainActivity extends Activity {
             public String getApiKey() {
                 return getSharedPreferences("tingli", MODE_PRIVATE).getString("apiKey", "");
             }
+            @android.webkit.JavascriptInterface
+            public void transcribeNative(final String modelId, final String base64Audio, final String callbackId) {
+                // 本地离线 Whisper 转写（sherpa-onnx），完全不走网络
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        String result;
+                        try {
+                            String modelDir;
+                            if ("base".equals(modelId)) {
+                                modelDir = "models/whisper-base";
+                            } else {
+                                modelDir = "models/whisper-tiny";
+                            }
+                            result = whisperEngine.transcribe(MainActivity.this, modelDir, base64Audio);
+                        } catch (Exception e) {
+                            String m = e.getMessage() == null ? "转写失败" : e.getMessage();
+                            result = "{\"ok\":false,\"error\":\"" + m.replace("\\", " ").replace("\"", "'") + "\"}";
+                        }
+                        final String fresult = result;
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                String cb = "window.__onNativeTranscribe && window.__onNativeTranscribe(" + jsonStr(callbackId) + ", " + fresult + ")";
+                                webView.evaluateJavascript(cb, null);
+                            }
+                        });
+                    }
+                }).start();
+            }
+
             @android.webkit.JavascriptInterface
             public void callDeepSeek(final String messagesJson, final String callbackId) {
                 // 原生侧直连 DeepSeek，绕开 WebView 的 CORS 限制

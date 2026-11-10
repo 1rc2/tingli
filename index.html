@@ -311,6 +311,7 @@ body{min-height:100vh;padding-bottom:70px}
           <option value="2">2.0x</option>
         </select>
         <button id="stopBtn" class="btn btn-secondary">■ 停止</button>
+        <button id="clearBtn" class="btn btn-secondary" style="margin-left:auto" title="清空当前音频与全部结果">✕ 清空</button>
       </div>
     </div>
 
@@ -451,6 +452,8 @@ function loadAudioBlob(blob, name){
   state.audioUrl = URL.createObjectURL(blob);
   const po = $('playOnlyBox');
   if(po) po.remove();
+  // 换新音频时清掉上一份的转写与 AI 结果
+  clearResults();
   $('apiArea').style.display = 'block';
   $('playerArea').style.display = 'block';
   initWaveSurfer();
@@ -501,22 +504,41 @@ async function fetchWithTimeout(url, ms){
   }
 }
 
+/* 判断拿到的字节到底是不是音频：很多听力页面链接返回的是 HTML，
+   过去会被当成 mp3 丢给 WaveSurfer，表现就是「播放失败」且没有任何提示。 */
+function looksLikeAudio(ab, contentType){
+  const ct = (contentType || '').toLowerCase();
+  if(/^audio\//.test(ct)) return true;
+  if(/text\/html|application\/(json|xml|xhtml\+xml)|text\/xml/.test(ct)) return false;
+  const n = Math.min(12, ab.byteLength);
+  const b = new Uint8Array(ab, 0, n);
+  const tag = String.fromCharCode(b[0]||0, b[1]||0, b[2]||0, b[3]||0);
+  if(tag === 'ID3 ' || tag === 'RIFF' || tag === 'OggS' || tag === 'fLaC' || tag === 'ftyp') return true;
+  if(b[0] === 0xFF && b.length > 1 && (b[1] & 0xE0) === 0xE0) return true; // mp3 / aac 帧头
+  return false;
+}
+
 async function fetchBytesThroughProxies(target, onProgress){
   const urls = buildProxyList(target);
-  let lastErr = null;
+  const errors = [];
   for(let i=0;i<urls.length;i++){
     try{
       if(onProgress) onProgress(i+1, urls.length);
       const resp = await fetchWithTimeout(urls[i]);
       if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      const ct = resp.headers.get('content-type') || '';
       const ab = await resp.arrayBuffer();
       if(ab.byteLength < 2048) throw new Error('返回内容过小，疑似被拦截');
-      return ab;
+      if(!looksLikeAudio(ab, ct)){
+        throw new Error(ct.includes('html') ? '该链接返回的是网页，不是音频文件' : '返回内容不是音频格式');
+      }
+      return { ab, type: /^audio\//i.test(ct) ? ct.split(';')[0].trim() : '' };
     }catch(err){
-      lastErr = err;
+      errors.push(err.message || String(err));
     }
   }
-  throw new Error(lastErr ? lastErr.message : '未知错误');
+  const uniq = [...new Set(errors)];
+  throw new Error(uniq.slice(0, 2).join(' / ') || '未知错误');
 }
 
 async function fetchTextThroughProxies(target, onProgress){
@@ -549,17 +571,17 @@ async function loadFromUrl(raw){
   showLoading('获取在线音频...', '若站点限制跨域，会自动切换代理通道');
   showStatus('正在获取音频...');
   try{
-    const ab = await fetchBytesThroughProxies(url, (i,n)=> showStatus(`正在获取音频（通道 ${i}/${n}）...`));
+    const got = await fetchBytesThroughProxies(url, (i,n)=> showStatus(`正在获取音频（通道 ${i}/${n}）...`));
     hideLoading();
-    const blob = new Blob([ab], { type: guessAudioType(url) });
+    const blob = new Blob([got.ab], { type: got.type || guessAudioType(url) });
     let name = 'online-audio';
     try{ name = decodeURIComponent(url.split('/').pop().split('?')[0]) || name; }catch(e){}
     loadAudioBlob(blob, name);
-    showStatus(`在线音频已加载（${(ab.byteLength/1024/1024).toFixed(1)} MB）`, 'success');
+    showStatus(`在线音频已加载（${(got.ab.byteLength/1024/1024).toFixed(1)} MB）`, 'success');
   }catch(err){
     hideLoading();
     renderPlayOnly(url);
-    showStatus('无法读取音频数据：' + (err.message||err) + '，已切换为仅播放模式', 'error');
+    showStatus('无法读取音频数据：' + (err.message||err), 'error');
   }
 }
 
@@ -580,13 +602,68 @@ function renderPlayOnly(url){
     <h2><span class="dot"></span>仅播放模式</h2>
     <div class="player-only">
       <audio controls preload="metadata" src="${escapeHtml(url).replace(/"/g,'&quot;')}"></audio>
-      <div class="hint">该音频站点禁止跨域读取，浏览器无法读取音频数据做本地转写。<br/>
+      <div class="hint" id="poHint">该音频站点禁止跨域读取，浏览器无法读取音频数据做本地转写。<br/>
       可先试听，确认内容合适后用浏览器下载该音频，再切到「本地上传」转写。</div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn btn-primary" id="poRetry">重试加载</button>
+        <button class="btn btn-secondary" id="poClear">清空，换个链接</button>
+      </div>
     </div>`;
+  const audioEl = box.querySelector('audio');
+  if(audioEl){
+    audioEl.addEventListener('error', ()=>{
+      const hint = box.querySelector('#poHint');
+      if(hint) hint.innerHTML = '该直链在浏览器里也播不了（可能需要登录、防盗链或已失效）。<br/>建议换个直链，或下载后本地转写。';
+    });
+  }
+  box.querySelector('#poRetry').addEventListener('click', ()=> loadFromUrl(url));
+  box.querySelector('#poClear').addEventListener('click', resetAll);
   box.scrollIntoView({behavior:'smooth', block:'start'});
 }
 
+/* 清空当前音频 + 全部转写/AI 结果，回到可重新输入链接的状态 */
+function resetAll(){
+  try{ if(state.wavesurfer) state.wavesurfer.destroy(); }catch(e){}
+  state.wavesurfer = null;
+  if(state.audioUrl){ URL.revokeObjectURL(state.audioUrl); state.audioUrl = null; }
+  state.audioBlob = null;
+  state.audioName = '';
+  const po = $('playOnlyBox');
+  if(po) po.remove();
+  $('waveform').innerHTML = '';
+  $('curTime').textContent = '0:00';
+  $('totTime').textContent = '0:00';
+  clearResults();
+  $('playerArea').style.display = 'none';
+  $('apiArea').style.display = 'none';
+  $('audioUrlInput').value = '';
+  $('rssList').innerHTML = '';
+  setBtnLoading($('transcribeBtn'), false);
+  hideLoading();
+  showStatus('已清空，可重新输入链接或上传文件', 'success');
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+/* 只清转写与 AI 结果，保留当前音频 */
+function clearResults(){
+  state.segments = [];
+  state.fullText = '';
+  state.words = [];
+  state.quiz = [];
+  state.loopingSegIdx = -1;
+  $('segList').innerHTML = '';
+  $('vocabArea').innerHTML = '<div class="vocab-empty">点击上方 <strong>② AI 提取生词</strong> 按钮自动筛选六级核心词汇</div>';
+  $('quizArea').innerHTML = '<div class="vocab-empty">完成转写后，点击 <strong>③ 生成听力测验</strong> 按钮由 AI 出题</div>';
+  $('vocabBtn').disabled = true;
+  $('quizBtn').disabled = true;
+  switchTab('seg');
+}
+$('clearBtn').addEventListener('click', resetAll);
+
 $('loadUrlBtn').addEventListener('click', ()=> loadFromUrl($('audioUrlInput').value));
+$('audioUrlInput').addEventListener('keydown', e=>{
+  if(e.key === 'Enter') loadFromUrl(e.target.value);
+});
 
 /* ---------- RSS 播客源 ---------- */
 $('rssPreset').addEventListener('change', e=>{
@@ -665,6 +742,9 @@ async function initWaveSurfer(){
     normalize: true,
   });
   state.wavesurfer.load(state.audioUrl);
+  state.wavesurfer.on('error', err=>{
+    showStatus('音频解码/播放失败：' + (err && err.message ? err.message : err) + '（可点「✕ 清空」后换个链接）', 'error');
+  });
   state.wavesurfer.on('ready', ()=>{
     $('totTime').textContent = fmtTime(state.wavesurfer.getDuration());
   });

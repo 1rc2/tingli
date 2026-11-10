@@ -439,7 +439,14 @@ function setBtnLoading(btn, loading){
    ========================================================= */
 const uploadZone = $('uploadZone');
 const fileInput = $('fileInput');
-uploadZone.addEventListener('click', ()=> fileInput.click());
+/* label 原生会把点击转发给 input，若再手动 input.click() 会弹两次文件选择框，
+   这里用 preventDefault 取消原生转发，手动触发一次；并用 e.target 判断避免
+   input.click() 冒泡回 label 造成递归。 */
+uploadZone.addEventListener('click', e=>{
+  if(e.target === fileInput) return;
+  e.preventDefault();
+  fileInput.click();
+});
 uploadZone.addEventListener('dragover', e=>{ e.preventDefault(); uploadZone.classList.add('active'); });
 uploadZone.addEventListener('dragleave', ()=> uploadZone.classList.remove('active'));
 uploadZone.addEventListener('drop', e=>{
@@ -527,7 +534,9 @@ function looksLikeAudio(ab, contentType){
   const n = Math.min(12, ab.byteLength);
   const b = new Uint8Array(ab, 0, n);
   const tag = String.fromCharCode(b[0]||0, b[1]||0, b[2]||0, b[3]||0);
-  if(tag === 'ID3 ' || tag === 'RIFF' || tag === 'OggS' || tag === 'fLaC' || tag === 'ftyp') return true;
+  const tag2 = String.fromCharCode(b[4]||0, b[5]||0, b[6]||0, b[7]||0);
+  if(tag === 'ID3 ' || tag === 'RIFF' || tag === 'OggS' || tag === 'fLaC') return true;
+  if(tag2 === 'ftyp' || tag === 'ftyp') return true; // M4A/MP4：'ftyp' 位于第 4 字节偏移（前 4 字节是 box size）
   if(b[0] === 0xFF && b.length > 1 && (b[1] & 0xE0) === 0xE0) return true; // mp3 / aac 帧头
   return false;
 }
@@ -760,7 +769,18 @@ async function initWaveSurfer(){
   });
   state.wavesurfer.load(state.audioUrl);
   state.wavesurfer.on('error', err=>{
-    showStatus('音频解码/播放失败：' + (err && err.message ? err.message : err) + '（可点「✕ 清空」后换个链接）', 'error');
+    // 波形解码失败时降级为原生播放器，保证用户仍能试听
+    const wf = $('waveform');
+    const msg = (err && err.message) ? err.message : String(err);
+    if(state.audioUrl && !wf.querySelector('audio')){
+      const a = document.createElement('audio');
+      a.controls = true;
+      a.style.width = '100%';
+      a.src = state.audioUrl;
+      wf.innerHTML = '';
+      wf.appendChild(a);
+    }
+    showStatus('波形解码失败：' + msg + '（已降级为原生播放器；若仍无声音，请转为标准 MP3 后重试）', 'error');
   });
   state.wavesurfer.on('ready', ()=>{
     $('totTime').textContent = fmtTime(state.wavesurfer.getDuration());

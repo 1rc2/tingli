@@ -216,6 +216,7 @@ body{min-height:100vh;padding-bottom:70px}
       <div class="api-row">
         <input type="text" id="audioUrlInput" placeholder="粘贴音频直链，如 https://xxx.com/a.mp3" />
         <button class="btn btn-primary" id="loadUrlBtn">加载</button>
+        <button class="btn btn-secondary" id="clearUrlBtn" title="清空当前音频与结果">清空</button>
       </div>
       <div class="hint">
         支持 mp3 / m4a / wav 直链。若站点禁止跨域读取，会自动尝试公共 CORS 代理；全部失败时会给出「仅播放」模式，可先试听再手动下载上传转写。
@@ -581,7 +582,9 @@ async function loadFromUrl(raw){
   }catch(err){
     hideLoading();
     renderPlayOnly(url);
-    showStatus('无法读取音频数据：' + (err.message||err), 'error');
+    const isAudioLike = /\.(mp3|m4a|wav|aac|ogg|flac)(\?|$)/i.test(url);
+    showStatus('无法读取音频数据：' + (err.message||err) +
+      (isAudioLike ? '' : '（该地址不像音频直链，请换成以 .mp3 / .m4a 结尾的链接）'), 'error');
   }
 }
 
@@ -659,6 +662,7 @@ function clearResults(){
   switchTab('seg');
 }
 $('clearBtn').addEventListener('click', resetAll);
+$('clearUrlBtn').addEventListener('click', resetAll);
 
 $('loadUrlBtn').addEventListener('click', ()=> loadFromUrl($('audioUrlInput').value));
 $('audioUrlInput').addEventListener('keydown', e=>{

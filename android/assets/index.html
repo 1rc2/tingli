@@ -300,7 +300,7 @@ body{min-height:100vh;padding-bottom:70px}
 
     <!-- 直连模式：豆包方舟 -->
     <div id="modeDirect" style="display:none">
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px" id="directModeHint">
         直接调用豆包方舟 API（Key 保存在浏览器 localStorage，仅本机可见）
       </div>
       <div class="api-row">
@@ -421,6 +421,9 @@ const state = {
 };
 
 const LS_AI_CFG = 'listen_train_ai_config';
+
+// App 内（WebView 的 app.local 源 + 原生桥）区分于网页：Key 存 Android 侧、不回显
+const IS_APP = (location.host === 'app.local') && !!window.AndroidBridge;
 
 /* =========================================================
    Utility
@@ -844,13 +847,19 @@ $('speedSelect').addEventListener('change', e=>{
    AI Config handling (模式切换 + localStorage)
    ========================================================= */
 function saveAICfg(){
-  localStorage.setItem(LS_AI_CFG, JSON.stringify({
+  const cfg = {
     aiMode: state.aiMode,
     proxyUrl: state.proxyUrl,
-    arkApiKey: state.arkApiKey,
     arkEndpoint: state.arkEndpoint,
     customProxy: state.customProxy,
-  }));
+  };
+  if(IS_APP){
+    // App 端：Key 存 Android 原生侧（只写，不落 localStorage）
+    window.AndroidBridge.saveApiKey(state.arkApiKey || '');
+  } else {
+    cfg.arkApiKey = state.arkApiKey;
+  }
+  localStorage.setItem(LS_AI_CFG, JSON.stringify(cfg));
 }
 function loadAICfg(){
   try{
@@ -858,6 +867,9 @@ function loadAICfg(){
     Object.assign(state, c);
     state.aiMode = c.aiMode || 'proxy';
   }catch(e){}
+  if(IS_APP){
+    state.arkApiKey = window.AndroidBridge.getApiKey() || '';
+  }
 }
 function switchAIMode(mode){
   state.aiMode = mode;
@@ -884,6 +896,10 @@ $('saveConfigBtn').addEventListener('click', ()=>{
 $('saveKeyBtn').addEventListener('click', ()=>{
   if(!state.arkApiKey){ showStatus('请填写 API Key','warn'); return; }
   saveAICfg();
+  if(IS_APP){
+    $('apiKeyInput').value = '';
+    $('apiKeyInput').placeholder = '已保存，输入新值可更换';
+  }
   showStatus('直连配置已保存','success');
   setTimeout(hideStatus, 2000);
 });
@@ -1276,9 +1292,18 @@ document.addEventListener('DOMContentLoaded', ()=>{
   // 回填 UI
   switchAIMode(state.aiMode || 'proxy');
   if(state.proxyUrl) $('proxyUrlInput').value = state.proxyUrl;
-  if(state.arkApiKey) $('apiKeyInput').value = state.arkApiKey;
+  if(state.arkApiKey){
+    if(IS_APP){
+      // App 端：不回显明文，只提示已保存
+      $('apiKeyInput').value = '';
+      $('apiKeyInput').placeholder = '已保存，输入新值可更换';
+    } else {
+      $('apiKeyInput').value = state.arkApiKey;
+    }
+  }
   if(state.arkEndpoint) $('apiEndpointInput').value = state.arkEndpoint;
   if(state.customProxy) $('customProxyInput').value = state.customProxy;
+  if(IS_APP) $('directModeHint').textContent = '直接调用豆包方舟 API（Key 存 App 本地、不回显，仅可更换）';
 });
 </script>
 </body>

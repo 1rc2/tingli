@@ -91,6 +91,18 @@ public class MainActivity extends Activity {
             }
         });
 
+        // 暴露原生存储接口：API Key 存 Android 侧，页面不回显明文，只能覆盖更换
+        webView.addJavascriptInterface(new Object() {
+            @android.webkit.JavascriptInterface
+            public void saveApiKey(String key) {
+                getSharedPreferences("tingli", MODE_PRIVATE).edit().putString("apiKey", key).apply();
+            }
+            @android.webkit.JavascriptInterface
+            public String getApiKey() {
+                return getSharedPreferences("tingli", MODE_PRIVATE).getString("apiKey", "");
+            }
+        }, "AndroidBridge");
+
         webView.loadUrl(LOCAL_ORIGIN + "index.html");
     }
 

@@ -966,33 +966,48 @@ $('saveKeyBtn').addEventListener('click', ()=>{
 async function loadWhisper(){
   showLoading('加载 Whisper 模型中...', '首次使用需要下载约 70MB，请耐心等待');
   showStatus('加载 Whisper 模型...');
-  try{
-    await window.libsReady;
-    if(!window.transformers){ throw new Error('Transformers.js 未加载，请检查网络'); }
-    const { pipeline, env } = window.transformers;
-    // CRITICAL: single-thread WASM - avoid SharedArrayBuffer / cross-origin header issues on GitHub Pages
-    env.allowLocalModels = false;
-    env.useBrowserCache = true;
-    // 单线程：必须在 onnx 后端上设置，之前写成 env.backends = [...] 是无效的
+  // 国内优先走 hf-mirror 镜像，失败再回退官方 huggingface.co
+  const hosts = ['https://hf-mirror.com', 'https://huggingface.co'];
+  for(let attempt=0; attempt<hosts.length; attempt++){
     try{
-      if(!env.backends.onnx) env.backends.onnx = {};
-      if(!env.backends.onnx.wasm) env.backends.onnx.wasm = {};
-      env.backends.onnx.wasm.numThreads = 1;
-      env.backends.onnx.wasm.proxy = false;
-    }catch(e){ console.warn('设置单线程失败', e); }
+      await window.libsReady;
+      if(!window.transformers){ throw new Error('Transformers.js 未加载，请检查网络'); }
+      const { pipeline, env } = window.transformers;
+      // CRITICAL: single-thread WASM - avoid SharedArrayBuffer / cross-origin header issues on GitHub Pages
+      env.allowLocalModels = false;
+      env.useBrowserCache = true;
+      // 单线程：必须在 onnx 后端上设置，之前写成 env.backends = [...] 是无效的
+      try{
+        if(!env.backends.onnx) env.backends.onnx = {};
+        if(!env.backends.onnx.wasm) env.backends.onnx.wasm = {};
+        env.backends.onnx.wasm.numThreads = 1;
+        env.backends.onnx.wasm.proxy = false;
+      }catch(e){ console.warn('设置单线程失败', e); }
 
-    state.pipeline = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base', {
-      quantized: true,
-    });
-    hideLoading();
-    showStatus('模型加载完成，开始转写...');
-    return true;
-  }catch(err){
-    hideLoading();
-    console.error(err);
-    showStatus('模型加载失败: ' + (err.message||err), 'error');
-    return false;
+      // 指定模型下载源（国内镜像优先）
+      env.remoteHost = hosts[attempt];
+      env.remotePathTemplate = '{model}/resolve/{revision}/';
+      showStatus(`正在从 ${hosts[attempt]} 下载模型...`);
+
+      state.pipeline = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base', {
+        quantized: true,
+      });
+      hideLoading();
+      showStatus('模型加载完成，开始转写...');
+      return true;
+    }catch(err){
+      console.error('模型加载失败（源 ' + (attempt+1) + '/' + hosts.length + '）:', err);
+      state.pipeline = null;
+      if(attempt < hosts.length-1){
+        showStatus('镜像源下载失败，自动切换官方源重试...');
+        continue;
+      }
+      hideLoading();
+      showStatus('模型加载失败: ' + (err.message||err), 'error');
+      return false;
+    }
   }
+  return false;
 }
 
 async function runTranscribe(){

@@ -38,30 +38,35 @@ window.libsReady = (async function(){
   --success:#10b981;
   --danger:#ef4444;
   --radius:12px;
-  --shadow:0 2px 12px rgba(0,0,0,0.06);
+  --shadow:0 1px 2px rgba(16,24,40,.04), 0 4px 16px rgba(16,24,40,.06);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.5}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.5;overflow-x:hidden}
 body{min-height:100vh;padding-bottom:70px}
 
 /* Header */
-.header{background:linear-gradient(135deg,#2a6df4,#4f8bff);color:#fff;padding:16px 20px;display:flex;align-items:center;gap:12px}
+.header{background:linear-gradient(135deg,#2a6df4,#4f8bff);color:#fff;padding:16px 20px;padding-top:calc(16px + env(safe-area-inset-top));display:flex;align-items:center;gap:12px}
 .header h1{margin:0;font-size:17px;font-weight:600;flex:1}
 .header .badge{background:rgba(255,255,255,.2);padding:2px 8px;border-radius:10px;font-size:11px}
 
 /* Container */
-.container{max-width:800px;margin:0 auto;padding:16px}
+.container{max-width:800px;margin:0 auto;padding:16px;padding-left:calc(16px + env(safe-area-inset-left));padding-right:calc(16px + env(safe-area-inset-right))}
 
 /* Upload area */
-.upload-zone{background:var(--card);border:2px dashed var(--border);border-radius:var(--radius);padding:28px 16px;text-align:center;cursor:pointer;transition:all .2s}
-.upload-zone:hover,.upload-zone.active{border-color:var(--primary);background:var(--primary-light)}
-.upload-zone input{display:none}
-.upload-zone .icon{font-size:36px;margin-bottom:8px}
-.upload-zone p{margin:4px 0;color:var(--text-muted)}
+/* 注意：label 默认是 inline，内部又有块级元素，会让虚线边框断成几截，
+   所以必须显式设为 flex 块级容器。 */
+.upload-zone{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  width:100%;min-height:158px;background:var(--card);border:2px dashed var(--border);
+  border-radius:var(--radius);padding:24px 16px;text-align:center;cursor:pointer;transition:all .2s}
+.upload-zone:active,.upload-zone:hover,.upload-zone.active{border-color:var(--primary);background:var(--primary-light)}
+.upload-zone input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.upload-zone .icon{font-size:34px;line-height:1;margin-bottom:6px}
+.upload-zone p{margin:2px 0;color:var(--text-muted);font-size:13px}
+.upload-zone small{display:block;margin-top:4px;font-size:11px;line-height:1.5;color:var(--text-muted)}
 .upload-zone strong{color:var(--primary)}
 
 /* 来源面板 */
-.src-panel{display:none}
+.src-panel{display:none;width:100%}
 .src-panel.active{display:block}
 .hint{font-size:12px;color:var(--text-muted);line-height:1.6}
 .hint code{background:#f3f4f6;padding:1px 4px;border-radius:4px;font-size:11px}
@@ -167,11 +172,19 @@ body{min-height:100vh;padding-bottom:70px}
 
 /* Hide scrollbar for mobile */
 @media(max-width:600px){
-  .container{padding:12px}
+  .container{padding:12px;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
   .card{padding:14px}
-  .header{padding:12px 14px}
+  .header{padding:12px 14px;padding-top:calc(12px + env(safe-area-inset-top))}
   .header h1{font-size:15px}
   .wave-container{margin:6px -14px 0}
+  /* 窄屏下输入框独占一行，按钮等宽排列，避免挤成一团 */
+  .api-row{flex-wrap:wrap}
+  .api-row input,.api-row select{flex:1 1 100%}
+  .api-row .btn{flex:1 1 0;min-width:0}
+  .mode-switch button{font-size:12px;padding:8px 2px}
+  .upload-zone{min-height:140px;padding:20px 14px}
+  .tabs{gap:4px;padding:5px}
+  .tab{font-size:12px;padding:9px 2px}
 }
 
 /* Loading overlay */

@@ -49,6 +49,14 @@ body{min-height:100vh;padding-bottom:70px}
 .header h1{margin:0;font-size:17px;font-weight:600;flex:1}
 .header .badge{background:rgba(255,255,255,.2);padding:2px 8px;border-radius:10px;font-size:11px}
 
+/* App 下载入口 */
+.dl-banner{display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,#2a6df4,#4f8bff);color:#fff;border-radius:var(--radius);padding:14px 16px;margin-bottom:14px;box-shadow:var(--shadow)}
+.dl-banner .dl-icon{font-size:28px;line-height:1}
+.dl-banner .dl-text{flex:1;min-width:0}
+.dl-banner .dl-title{font-weight:600;font-size:15px}
+.dl-banner .dl-sub{font-size:12px;opacity:.9;margin-top:2px}
+.dl-banner .dl-btn{background:#fff;color:var(--primary);padding:9px 16px;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap}
+
 /* Container */
 .container{max-width:800px;margin:0 auto;padding:16px;padding-left:calc(16px + env(safe-area-inset-left));padding-right:calc(16px + env(safe-area-inset-right))}
 
@@ -204,6 +212,17 @@ body{min-height:100vh;padding-bottom:70px}
 </div>
 
 <div class="container">
+
+  <!-- App 下载入口 -->
+  <div class="dl-banner" id="appBanner">
+    <span class="dl-icon">📱</span>
+    <div class="dl-text">
+      <div class="dl-title">下载 Android App</div>
+      <div class="dl-sub">独立安装包 · 主屏幕一键打开 · 免浏览器</div>
+    </div>
+    <a class="dl-btn" href="tingli.apk" download>⬇️ 下载</a>
+  </div>
+  <script>if(location.host==='app.local'){document.getElementById('appBanner').style.display='none';}</script>
 
   <!-- Step 1: 听力来源 -->
   <div id="uploadArea" class="card">

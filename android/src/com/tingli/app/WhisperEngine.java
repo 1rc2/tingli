@@ -13,7 +13,13 @@ import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig;
 import com.k2fsa.sherpa.onnx.OfflineRecognizerResult;
 import com.k2fsa.sherpa.onnx.OfflineStream;
 import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig;
+import com.k2fsa.sherpa.onnx.SileroVadModelConfig;
+import com.k2fsa.sherpa.onnx.SpeechSegment;
+import com.k2fsa.sherpa.onnx.TenVadModelConfig;
+import com.k2fsa.sherpa.onnx.Vad;
+import com.k2fsa.sherpa.onnx.VadModelConfig;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.DataInputStream;
@@ -21,8 +27,12 @@ import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * 本地离线 Whisper 转写引擎（基于 sherpa-onnx）。
@@ -36,6 +46,7 @@ public class WhisperEngine {
     private static final int TARGET_RATE = 16000;
     private static final int SEG_SECONDS = 30;
     private static final int MAX_SECONDS = 3600; // 单次转写上限 1 小时
+    private static final String VAD_ASSET = "models/silero_vad.onnx";
 
     private OfflineRecognizer recognizer;
     private String loadedModel = "";
@@ -131,66 +142,213 @@ public class WhisperEngine {
         }
         try {
             init(ctx, modelDir);
-            String text = recognizeFile(pcmFile, progress);
+            JSONArray segments = new JSONArray();
+            StringBuilder allText = new StringBuilder();
+            boolean usedVad = false;
+
+            // 优先用 VAD 按语音段切分：不切断单词，且段起止时间即真实时间戳
+            if (hasAsset(ctx, VAD_ASSET)) {
+                try {
+                    recognizeWithVad(ctx, pcmFile, segments, allText, progress);
+                    usedVad = segments.length() > 0;
+                } catch (Throwable e) {
+                    segments = new JSONArray();
+                    allText.setLength(0);
+                    usedVad = false;
+                }
+            }
+            // 回退：无 VAD 模型时按 30 秒固定分段
+            if (!usedVad) {
+                recognizeFixed(pcmFile, segments, allText, progress);
+            }
+
             JSONObject o = new JSONObject();
             o.put("ok", true);
-            o.put("text", text == null ? "" : text.trim());
+            o.put("text", allText.toString().trim());
             o.put("duration", duration);
             o.put("model", modelTag == null ? "" : modelTag);
+            o.put("segments", segments);
+            o.put("vad", usedVad);
             return o.toString();
         } finally {
             if (pcmFile.exists()) pcmFile.delete();
         }
     }
 
-    /** 分段读取 float PCM 文件并转写，内存恒定。 */
-    private String recognizeFile(File pcmFile, Progress progress) throws IOException {
+    /** 用 Silero VAD 流式检测语音段，逐段转写并累计真实时间戳。内存恒定。 */
+    private void recognizeWithVad(Context ctx, File pcmFile, JSONArray segments,
+                                  StringBuilder allText, Progress progress) throws Exception {
+        SileroVadModelConfig silero = new SileroVadModelConfig(
+                VAD_ASSET, 0.5f, 0.25f, 0.25f, 512, 20f);
+        TenVadModelConfig ten = new TenVadModelConfig("", 0.5f, 0.25f, 0.25f, 512, 20f);
+        VadModelConfig cfg = new VadModelConfig(silero, ten, TARGET_RATE, 1, "cpu", false);
+
+        Vad vad = new Vad(ctx.getAssets(), cfg);
+        long totalFrames = pcmFile.length() / 4;
+        long readFrames = 0;
+
+        try (DataInputStream din = openPcm(pcmFile)) {
+            final int WIN = 512;
+            float[] window = new float[WIN];
+            while (true) {
+                int n = 0;
+                for (int i = 0; i < WIN; i++) {
+                    try {
+                        window[i] = din.readFloat();
+                        n++;
+                    } catch (IOException eof) {
+                        break;
+                    }
+                }
+                if (n == 0) break;
+                float[] chunk = (n == WIN) ? window : Arrays.copyOf(window, n);
+                vad.acceptWaveform(chunk);
+                readFrames += n;
+                drainVad(vad, segments, allText);
+                if (progress != null && totalFrames > 0) {
+                    progress.onProgress((int) Math.min(100, readFrames * 100 / totalFrames), 100);
+                }
+            }
+            vad.flush();
+            drainVad(vad, segments, allText);
+        } finally {
+            try { vad.release(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /** 取出 VAD 已就绪的语音段并转写。 */
+    private void drainVad(Vad vad, JSONArray segments, StringBuilder allText) {
+        while (!vad.empty()) {
+            SpeechSegment seg = vad.front();
+            vad.pop();
+            float[] samples = seg.getSamples();
+            if (samples == null || samples.length == 0) continue;
+
+            String text = recognizeSamples(samples);
+            if (text == null) continue;
+            text = text.trim();
+            if (text.isEmpty()) continue;
+
+            double startSec = seg.getStart() / (double) TARGET_RATE;
+            double endSec = startSec + samples.length / (double) TARGET_RATE;
+            appendSentences(segments, allText, text, startSec, endSec);
+        }
+    }
+
+    /** 单个语音段转写（可返回 null 表示无结果）。 */
+    private String recognizeSamples(float[] samples) {
+        OfflineStream stream = null;
+        try {
+            stream = recognizer.createStream();
+            stream.acceptWaveform(samples, TARGET_RATE);
+            recognizer.decode(stream);
+            OfflineRecognizerResult r = recognizer.getResult(stream);
+            return r == null ? null : r.getText();
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            if (stream != null) {
+                try { stream.release(); } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    /** 无 VAD 时的回退：按 30 秒固定分段转写。 */
+    private void recognizeFixed(File pcmFile, JSONArray segments,
+                                StringBuilder allText, Progress progress) throws IOException {
         long totalFrames = pcmFile.length() / 4;
         int segFrames = TARGET_RATE * SEG_SECONDS;
         int totalSegs = (int) Math.max(1, (totalFrames + segFrames - 1) / segFrames);
-        StringBuilder all = new StringBuilder();
 
-        try (DataInputStream din = new DataInputStream(new java.io.BufferedInputStream(
-                new java.io.FileInputStream(pcmFile), 1 << 16))) {
-
+        try (DataInputStream din = openPcm(pcmFile)) {
             long remaining = totalFrames;
             int done = 0;
             while (remaining > 0) {
                 int n = (int) Math.min(segFrames, remaining);
                 float[] buf = new float[n];
+                int filled = 0;
                 for (int i = 0; i < n; i++) {
                     try {
                         buf[i] = din.readFloat();
+                        filled++;
                     } catch (IOException eof) {
-                        n = i;
                         break;
                     }
                 }
-                if (n <= 0) break;
+                if (filled <= 0) break;
 
-                OfflineStream stream = recognizer.createStream();
-                String segText;
-                try {
-                    stream.acceptWaveform(buf, TARGET_RATE);
-                    recognizer.decode(stream);
-                    OfflineRecognizerResult r = recognizer.getResult(stream);
-                    segText = r.getText();
-                } finally {
-                    stream.release();
-                }
-                if (segText != null && segText.trim().length() > 0) {
-                    if (all.length() > 0) all.append(' ');
-                    all.append(segText.trim());
+                String text = recognizeSamples(filled == n ? buf : Arrays.copyOf(buf, filled));
+                if (text != null) {
+                    text = text.trim();
+                    if (!text.isEmpty()) {
+                        double startSec = (totalFrames - remaining) / (double) TARGET_RATE;
+                        double endSec = startSec + filled / (double) TARGET_RATE;
+                        appendSentences(segments, allText, text, startSec, endSec);
+                    }
                 }
 
-                remaining -= n;
+                remaining -= filled;
                 done++;
-                if (progress != null) {
-                    try { progress.onProgress(done, totalSegs); } catch (Throwable ignored) {}
-                }
+                if (progress != null) progress.onProgress(done, totalSegs);
             }
         }
-        return all.toString();
+    }
+
+    /** 按句末标点把一段文本切成句子，段内按字符比例分配起止时间。 */
+    private void appendSentences(JSONArray segments, StringBuilder allText,
+                                 String text, double startSec, double endSec) {
+        List<String> parts = new ArrayList<>();
+        StringBuilder buf = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            buf.append(ch);
+            if (ch == '.' || ch == '!' || ch == '?') {
+                String t = buf.toString().trim();
+                if (!t.isEmpty()) parts.add(t);
+                buf.setLength(0);
+            }
+        }
+        String rest = buf.toString().trim();
+        if (!rest.isEmpty()) parts.add(rest);
+        if (parts.isEmpty()) return;
+
+        int totalChars = 0;
+        for (String p : parts) totalChars += p.length();
+        if (totalChars <= 0) totalChars = 1;
+
+        double span = Math.max(0.1, endSec - startSec);
+        double acc = 0;
+        for (String p : parts) {
+            double s = startSec + acc / totalChars * span;
+            acc += p.length();
+            double e = startSec + acc / totalChars * span;
+            try {
+                JSONObject o = new JSONObject();
+                o.put("start", Math.round(s * 1000) / 1000.0);
+                o.put("end", Math.round(e * 1000) / 1000.0);
+                o.put("text", p);
+                segments.put(o);
+            } catch (Exception ignored) {}
+            if (allText.length() > 0) allText.append(' ');
+            allText.append(p);
+        }
+    }
+
+    private DataInputStream openPcm(File pcmFile) throws IOException {
+        return new DataInputStream(new java.io.BufferedInputStream(
+                new java.io.FileInputStream(pcmFile), 1 << 16));
+    }
+
+    private boolean hasAsset(Context ctx, String path) {
+        InputStream is = null;
+        try {
+            is = ctx.getAssets().open(path);
+            return true;
+        } catch (IOException e) {
+            return false;
+        } finally {
+            if (is != null) try { is.close(); } catch (IOException ignored) {}
+        }
     }
 
     /**

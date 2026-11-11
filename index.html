@@ -1228,7 +1228,9 @@ async function runTranscribeNative(){
       };
       window.__onTranscribeProgress = (cid, done, total)=>{
         if(cid !== id) return;
-        $('loadingSub').textContent = `识别中 ${done}/${total} 段`;
+        $('loadingSub').textContent = (total === 100)
+          ? `识别中 ${done}%`
+          : `识别中 ${done}/${total} 段`;
       };
       $('loadingSub').textContent = '正在加载模型...';
       window.AndroidBridge.transcribeNative(modelId, id);
@@ -1236,12 +1238,20 @@ async function runTranscribeNative(){
 
     hideLoading();
     state.fullText = (result.text || '').trim();
-    state.segments = buildSegmentsFromText(state.fullText, result.duration || 0);
+    // 优先使用原生 VAD 切分出的真实时间戳
+    if(Array.isArray(result.segments) && result.segments.length){
+      state.segments = result.segments.map((s, i)=>({
+        start: s.start, end: s.end, text: s.text, idx: i
+      }));
+    }else{
+      state.segments = buildSegmentsFromText(state.fullText, result.duration || 0);
+    }
     renderSegments();
     pushHistory();
     const used = result.model || modelId;
     const fallbackTip = (modelId === 'base' && used === 'tiny') ? '（精简版未内置 base，已用 tiny）' : '';
-    showStatus(`转写完成，共 ${state.segments.length} 句 · ${Math.round(state.fullText.length)} 字符（本地离线${fallbackTip}）`, 'success');
+    const vadTip = result.vad ? ' · 智能断句' : '';
+    showStatus(`转写完成，共 ${state.segments.length} 句 · ${Math.round(state.fullText.length)} 字符（本地离线${vadTip}${fallbackTip}）`, 'success');
     $('vocabBtn').disabled = !state.fullText;
     $('quizBtn').disabled = !state.fullText;
   }catch(err){

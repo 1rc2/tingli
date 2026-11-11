@@ -36,7 +36,7 @@ if [ ! -f "$DIR/assets/models/whisper-tiny/encoder.int8.onnx" ]; then
   cp "$TMP/sherpa-onnx-whisper-tiny.en/tiny.en-tokens.txt" "$DIR/assets/models/whisper-tiny/tokens.txt"
 fi
 
-echo "==> 3/3 下载 Whisper base 模型"
+echo "==> 3/4 下载 Whisper base 模型"
 if [ ! -f "$DIR/assets/models/whisper-base/encoder.int8.onnx" ]; then
   mkdir -p "$DIR/assets/models/whisper-base"
   curl -sSL -o "$TMP/base.tar.bz2" "$BASE_URL"
@@ -44,6 +44,12 @@ if [ ! -f "$DIR/assets/models/whisper-base/encoder.int8.onnx" ]; then
   cp "$TMP/sherpa-onnx-whisper-base.en/base.en-encoder.int8.onnx" "$DIR/assets/models/whisper-base/encoder.int8.onnx"
   cp "$TMP/sherpa-onnx-whisper-base.en/base.en-decoder.int8.onnx" "$DIR/assets/models/whisper-base/decoder.int8.onnx"
   cp "$TMP/sherpa-onnx-whisper-base.en/base.en-tokens.txt" "$DIR/assets/models/whisper-base/tokens.txt"
+fi
+
+echo "==> 4/4 下载 Silero VAD 模型（智能断句）"
+if [ ! -f "$DIR/assets/models/silero_vad.onnx" ]; then
+  mkdir -p "$DIR/assets/models"
+  curl -sSL -o "$DIR/assets/models/silero_vad.onnx" "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 fi
 
 echo "==> 依赖准备完成"

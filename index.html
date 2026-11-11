@@ -779,6 +779,39 @@ function buildProxyList(target){
   return list;
 }
 
+/* ---------- App 原生网络通道（绕开 WebView 跨域限制） ---------- */
+function nativeHttpGet(url){
+  return new Promise((resolve, reject)=>{
+    if(!(IS_APP && window.AndroidBridge && window.AndroidBridge.httpGet)){
+      return reject(new Error('原生通道不可用'));
+    }
+    const id = 'hg' + Date.now() + '_' + Math.floor(Math.random()*1e6);
+    window.__onHttpGet = (cid, ok, payload)=>{
+      if(cid !== id) return;
+      window.__onHttpGet = null;
+      if(ok) resolve(payload || '');
+      else reject(new Error(payload || '网络请求失败'));
+    };
+    window.AndroidBridge.httpGet(url, id);
+  });
+}
+
+function nativeDownloadAudio(url){
+  return new Promise((resolve, reject)=>{
+    if(!(IS_APP && window.AndroidBridge && window.AndroidBridge.downloadAudio)){
+      return reject(new Error('原生通道不可用'));
+    }
+    const id = 'dl' + Date.now() + '_' + Math.floor(Math.random()*1e6);
+    window.__onDownload = (cid, res)=>{
+      if(cid !== id) return;
+      window.__onDownload = null;
+      if(res && res.name) resolve(res);
+      else reject(new Error((res && res.error) || '下载失败'));
+    };
+    window.AndroidBridge.downloadAudio(url, id);
+  });
+}
+
 async function fetchWithTimeout(url, ms){
   const ctrl = new AbortController();
   const timer = setTimeout(()=> ctrl.abort(), ms || 60000);
@@ -806,6 +839,20 @@ function looksLikeAudio(ab, contentType){
 }
 
 async function fetchBytesThroughProxies(target, onProgress){
+  // App 端走原生下载：直接落盘到本地库，彻底绕开 CORS 与第三方代理
+  if(IS_APP && window.AndroidBridge && window.AndroidBridge.downloadAudio){
+    try{
+      if(onProgress) onProgress(1, 1);
+      const res = await nativeDownloadAudio(target);
+      const resp = await fetch(window.AndroidBridge.libraryUrl(res.name));
+      if(!resp.ok) throw new Error('本地读取失败');
+      const ab = await resp.arrayBuffer();
+      if(!looksLikeAudio(ab, '')) throw new Error('下载内容不是音频格式');
+      return { ab, type: '', libName: res.name };
+    }catch(err){
+      throw new Error('下载失败：' + (err.message || err));
+    }
+  }
   const urls = buildProxyList(target);
   const errors = [];
   for(let i=0;i<urls.length;i++){
@@ -829,6 +876,15 @@ async function fetchBytesThroughProxies(target, onProgress){
 }
 
 async function fetchTextThroughProxies(target, onProgress){
+  // App 端走原生 HTTP：RSS 抓取不再依赖任何第三方 CORS 代理
+  if(IS_APP && window.AndroidBridge && window.AndroidBridge.httpGet){
+    try{
+      if(onProgress) onProgress(1, 1);
+      return await nativeHttpGet(target);
+    }catch(err){
+      throw new Error('读取订阅源失败：' + (err.message || err));
+    }
+  }
   const urls = buildProxyList(target);
   let lastErr = null;
   for(let i=0;i<urls.length;i++){
@@ -862,7 +918,8 @@ async function loadFromUrl(raw){
     hideLoading();
     const blob = new Blob([got.ab], { type: got.type || guessAudioType(url) });
     let name = 'online-audio';
-    try{ name = decodeURIComponent(url.split('/').pop().split('?')[0]) || name; }catch(e){}
+    if(got.libName){ name = got.libName; }
+    else { try{ name = decodeURIComponent(url.split('/').pop().split('?')[0]) || name; }catch(e){} }
     loadAudioBlob(blob, name);
   }catch(err){
     hideLoading();

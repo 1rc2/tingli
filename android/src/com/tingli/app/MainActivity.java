@@ -321,6 +321,58 @@ public class MainActivity extends Activity {
                 }
             }
 
+            /* ---------- 原生网络通道（绕开 WebView 跨域限制） ---------- */
+
+            /** 抓取文本（RSS / 任意网页），结果回传 window.__onHttpGet(id, ok, payload)。 */
+            @android.webkit.JavascriptInterface
+            public void httpGet(final String url, final String callbackId) {
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        String text = null;
+                        String err = null;
+                        try {
+                            text = httpGetText(url);
+                        } catch (Exception e) {
+                            err = e.getMessage() == null ? "网络请求失败" : e.getMessage();
+                        }
+                        final String ftext = text;
+                        final String ferr = err;
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                String js = ferr == null
+                                        ? "window.__onHttpGet && window.__onHttpGet(" + jsonStr(callbackId) + ", true, " + jsonStr(ftext) + ")"
+                                        : "window.__onHttpGet && window.__onHttpGet(" + jsonStr(callbackId) + ", false, " + jsonStr(ferr) + ")";
+                                webView.evaluateJavascript(js, null);
+                            }
+                        });
+                    }
+                }).start();
+            }
+
+            /** 下载音频到本地库，结果回传 window.__onDownload(id, json)。 */
+            @android.webkit.JavascriptInterface
+            public void downloadAudio(final String url, final String callbackId) {
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        String json;
+                        try {
+                            json = downloadToLibrary(url);
+                        } catch (Exception e) {
+                            String m = e.getMessage() == null ? "下载失败" : e.getMessage();
+                            json = "{\"error\":\"" + m.replace("\\", " ").replace("\"", "'") + "\"}";
+                        }
+                        final String fjson = json;
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                String js = "window.__onDownload && window.__onDownload("
+                                        + jsonStr(callbackId) + ", " + fjson + ")";
+                                webView.evaluateJavascript(js, null);
+                            }
+                        });
+                    }
+                }).start();
+            }
+
             @android.webkit.JavascriptInterface
             public void transcribeNative(final String modelId, final String callbackId) {
                 // 本地离线 Whisper 转写（sherpa-onnx），完全不走网络。
@@ -462,7 +514,114 @@ public class MainActivity extends Activity {
     }
 
     private String jsonStr(String s) {
-        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+        if (s == null) return "null";
+        StringBuilder sb = new StringBuilder("\"");
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"': sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                case '\u2028': sb.append("\\u2028"); break;
+                case '\u2029': sb.append("\\u2029"); break;
+                default:
+                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+            }
+        }
+        return sb.append('"').toString();
+    }
+
+    private static final String UA =
+            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) "
+            + "Chrome/120.0.0.0 Mobile Safari/537.36";
+
+    /** 原生抓取文本（RSS），绕开 WebView 跨域限制。 */
+    private String httpGetText(String url) throws Exception {
+        java.net.HttpURLConnection conn = null;
+        try {
+            conn = (java.net.HttpURLConnection) new URL(url).openConnection();
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(30000);
+            conn.setRequestProperty("User-Agent", UA);
+            conn.setRequestProperty("Accept",
+                    "application/rss+xml, application/atom+xml, application/xml, text/xml, */*");
+            conn.setInstanceFollowRedirects(true);
+            int code = conn.getResponseCode();
+            if (code >= 400) throw new Exception("HTTP " + code);
+            return readStream(conn.getInputStream());
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    /** 原生下载音频到本地库，返回 {name,size}。 */
+    private String downloadToLibrary(String url) throws Exception {
+        java.net.HttpURLConnection conn = null;
+        InputStream is = null;
+        OutputStream os = null;
+        try {
+            conn = (java.net.HttpURLConnection) new URL(url).openConnection();
+            conn.setConnectTimeout(20000);
+            conn.setReadTimeout(60000);
+            conn.setRequestProperty("User-Agent", UA);
+            conn.setInstanceFollowRedirects(true);
+            int code = conn.getResponseCode();
+            if (code >= 400) throw new Exception("HTTP " + code);
+            String ct = conn.getContentType();
+            if (ct != null && ct.toLowerCase().contains("text/html")) {
+                throw new Exception("该链接返回的是网页，不是音频");
+            }
+            String name = guessFileName(url, ct);
+
+            File dir = new File(getFilesDir(), "library");
+            if (!dir.exists()) dir.mkdirs();
+            File dest = new File(dir, name);
+            is = conn.getInputStream();
+            os = new java.io.FileOutputStream(dest);
+            byte[] buf = new byte[1 << 16];
+            int n;
+            while ((n = is.read(buf)) > 0) os.write(buf, 0, n);
+
+            org.json.JSONObject o = new org.json.JSONObject();
+            o.put("name", name);
+            o.put("size", dest.length());
+            return o.toString();
+        } finally {
+            try { if (is != null) is.close(); } catch (Exception ignored) {}
+            try { if (os != null) os.close(); } catch (Exception ignored) {}
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private String guessFileName(String url, String contentType) {
+        String name = "online-audio";
+        try {
+            String path = new URL(url).getPath();
+            String base = path.substring(path.lastIndexOf('/') + 1);
+            if (!base.isEmpty()) name = java.net.URLDecoder.decode(base, "UTF-8");
+        } catch (Exception ignored) {}
+        name = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+        if (name.isEmpty()) name = "online-audio";
+        if (!name.matches("(?i).*\\.(mp3|m4a|wav|aac|ogg|flac)$")) {
+            String ext = ".mp3";
+            String ct = contentType == null ? "" : contentType.toLowerCase();
+            if (ct.contains("mp4") || ct.contains("m4a")) ext = ".m4a";
+            else if (ct.contains("wav")) ext = ".wav";
+            else if (ct.contains("ogg")) ext = ".ogg";
+            else if (ct.contains("aac")) ext = ".aac";
+            name = name + ext;
+        }
+        File dir = new File(getFilesDir(), "library");
+        if (new File(dir, name).exists()) {
+            int dot = name.lastIndexOf('.');
+            String stem = dot > 0 ? name.substring(0, dot) : name;
+            String ext = dot > 0 ? name.substring(dot) : "";
+            name = stem + "_" + (System.currentTimeMillis() % 100000) + ext;
+        }
+        return name;
     }
 
     @Override

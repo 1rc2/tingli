@@ -2,6 +2,9 @@ package com.tingli.app;
 
 import android.app.Activity;
 import android.Manifest;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -113,6 +116,19 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public String getApiKey() {
                 return getSharedPreferences("tingli", MODE_PRIVATE).getString("apiKey", "");
+            }
+            @android.webkit.JavascriptInterface
+            public String readClipboard() {
+                try {
+                    ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (cm == null || !cm.hasPrimaryClip()) return "";
+                    ClipData clip = cm.getPrimaryClip();
+                    if (clip == null || clip.getItemCount() == 0) return "";
+                    CharSequence t = clip.getItemAt(0).coerceToText(MainActivity.this);
+                    return t == null ? "" : t.toString();
+                } catch (Throwable e) {
+                    return "";
+                }
             }
             @android.webkit.JavascriptInterface
             public void audioBegin() {

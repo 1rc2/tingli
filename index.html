@@ -356,7 +356,7 @@ body{min-height:100vh;padding-bottom:70px}
         直接调用豆包方舟 API（Key 保存在浏览器 localStorage，仅本机可见）
       </div>
       <div class="api-row">
-        <input type="password" id="apiKeyInput" placeholder="ARK API Key，如 sk-..." />
+        <input type="text" id="apiKeyInput" placeholder="ARK API Key，如 sk-..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="-webkit-text-security:disc" />
         <button class="btn btn-secondary" id="pasteKeyBtn" type="button" style="display:none;white-space:nowrap">📋 粘贴</button>
       </div>
       <div id="keySavedTag" style="display:none;font-size:12px;color:#059669;background:#d1fae5;border-radius:6px;padding:6px 10px;margin-bottom:8px">✓ Key 已安全保存（不回显），输入新值即可更换</div>
@@ -993,18 +993,22 @@ $('saveKeyBtn').addEventListener('click', ()=>{
   setTimeout(hideStatus, 2000);
 });
 $('pasteKeyBtn').addEventListener('click', async ()=>{
+  let txt = '';
   try{
-    const txt = await navigator.clipboard.readText();
-    if(txt && txt.trim()){
-      $('apiKeyInput').value = txt.trim();
-      state.arkApiKey = txt.trim();
-      showStatus('已粘贴到输入框，点击保存即可','success');
-      setTimeout(hideStatus, 2000);
-    } else {
-      showStatus('剪贴板为空','warn');
+    // App 端走系统剪贴板，避免 WebView clipboard 权限和安全键盘限制
+    if(IS_APP && window.AndroidBridge && typeof window.AndroidBridge.readClipboard === 'function'){
+      txt = window.AndroidBridge.readClipboard() || '';
+    } else if(navigator.clipboard && navigator.clipboard.readText){
+      txt = await navigator.clipboard.readText();
     }
-  }catch(e){
-    showStatus('无法读取剪贴板，请长按输入框手动粘贴','warn');
+  }catch(e){ txt = ''; }
+  if(txt && txt.trim()){
+    $('apiKeyInput').value = txt.trim();
+    state.arkApiKey = txt.trim();
+    showStatus('已粘贴到输入框，点击保存即可','success');
+    setTimeout(hideStatus, 2000);
+  } else {
+    showStatus('剪贴板为空或无法读取，请长按输入框手动粘贴','warn');
   }
 });
 

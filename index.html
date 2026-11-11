@@ -293,6 +293,11 @@ body{min-height:100vh;padding-bottom:70px}
         <p><strong>点击选择</strong> 或拖拽 MP3 文件到此处</p>
         <small style="color:var(--text-muted)">音频仅在浏览器本地处理，不会上传到任何服务器</small>
       </label>
+      <div id="localTools" style="display:none;gap:8px;margin-top:10px">
+        <button class="btn btn-secondary" id="scanLocalBtn" type="button">🔍 扫描本机听力音频</button>
+        <button class="btn btn-secondary" id="libraryBtn" type="button">📚 本地库</button>
+      </div>
+      <div id="localList" style="display:none;margin-top:10px"></div>
     </div>
 
     <!-- 在线链接 -->
@@ -457,6 +462,7 @@ body{min-height:100vh;padding-bottom:70px}
   <div class="spinner-lg"></div>
   <p id="loadingText">加载模型中...</p>
   <small id="loadingSub">首次加载 Whisper 需从 CDN 下载 ~70MB 模型</small>
+  <button id="loadingCancel" class="btn btn-secondary" type="button" style="display:none;margin-top:14px">取消</button>
 </div>
 
 <script>
@@ -518,14 +524,28 @@ function showStatus(text, type=''){
 function hideStatus(){
   $('statusBar').className = 'status-bar';
 }
-function showLoading(text, sub=''){
+let loadingCancelCb = null;
+function showLoading(text, sub='', onCancel){
   $('loadingMask').classList.add('show');
   $('loadingText').textContent = text;
   $('loadingSub').textContent = sub;
+  loadingCancelCb = onCancel || null;
+  $('loadingCancel').style.display = loadingCancelCb ? 'inline-block' : 'none';
 }
 function hideLoading(){
   $('loadingMask').classList.remove('show');
+  $('loadingCancel').style.display = 'none';
+  loadingCancelCb = null;
 }
+$('loadingCancel').addEventListener('click', ()=>{
+  const cb = loadingCancelCb;
+  loadingCancelCb = null;
+  $('loadingCancel').style.display = 'none';
+  hideLoading();
+  if(cb) { try{ cb(); }catch(e){} }
+  showStatus('已取消加载','warn');
+  setTimeout(hideStatus, 1800);
+});
 function setBtnLoading(btn, loading){
   if(loading){ btn.disabled = true; btn.dataset.orig = btn.textContent; btn.textContent = '处理中...'; }
   else{ btn.disabled = false; btn.textContent = btn.dataset.orig || btn.textContent; }
@@ -566,6 +586,130 @@ function handleFile(file){
   fileInput.value = '';
 }
 
+/* ---------- App：本机听力音频扫描 + 本地库 ---------- */
+let localItems = [];
+function fmtBytes(b){
+  if(!b) return '0 KB';
+  return b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : (b/1024).toFixed(0)+' KB';
+}
+function renderLocalList(items, mode){
+  localItems = items || [];
+  const box = $('localList');
+  box.style.display = 'block';
+  if(!localItems.length){
+    box.innerHTML = `<div style="font-size:13px;color:var(--text-muted);padding:8px 2px">${
+      mode === 'scan'
+        ? '没有找到文件名含「听力」的音频，可点上方选择文件手动导入'
+        : '本地库还是空的，导入的音频会保存在这里'
+    }</div>`;
+    return;
+  }
+  box.innerHTML = localItems.map((it, i)=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:#fff">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(it.name||'')}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${fmtBytes(it.size)}</div>
+      </div>
+      ${mode === 'scan'
+        ? `<button class="btn btn-primary" style="padding:5px 10px;font-size:12px" data-act="import" data-idx="${i}">导入</button>`
+        : `<button class="btn btn-primary" style="padding:5px 10px;font-size:12px" data-act="open" data-idx="${i}">打开</button>
+           <button class="btn btn-secondary" style="padding:5px 10px;font-size:12px" data-act="del" data-idx="${i}">删除</button>`}
+    </div>`).join('');
+}
+
+async function openLibraryFile(name){
+  try{
+    showLoading('正在打开音频...', name);
+    const url = window.AndroidBridge.libraryUrl(name);
+    const resp = await fetch(url);
+    if(!resp.ok) throw new Error('读取失败');
+    const blob = await resp.blob();
+    hideLoading();
+    loadAudioBlob(blob, name);
+  }catch(e){
+    hideLoading();
+    showStatus('打开失败：' + (e.message||e), 'error');
+  }
+}
+
+if(IS_APP && window.AndroidBridge && typeof window.AndroidBridge.scanLocalAudio === 'function'){
+  $('localTools').style.display = 'flex';
+}
+
+$('scanLocalBtn').addEventListener('click', ()=>{
+  try{
+    if(!window.AndroidBridge.hasStoragePermission()){
+      window.AndroidBridge.requestStoragePermission();
+      showStatus('请允许存储权限，然后再次点击扫描','warn');
+      return;
+    }
+    const res = JSON.parse(window.AndroidBridge.scanLocalAudio() || '{}');
+    if(res.needPermission){
+      window.AndroidBridge.requestStoragePermission();
+      showStatus('请允许存储权限，然后再次点击扫描','warn');
+      return;
+    }
+    if(res.error){ showStatus('扫描失败：' + res.error, 'error'); return; }
+    renderLocalList(res.list, 'scan');
+    showStatus(`找到 ${ (res.list||[]).length } 个听力音频`,'success');
+    setTimeout(hideStatus, 2000);
+  }catch(e){
+    showStatus('扫描失败：' + (e.message||e), 'error');
+  }
+});
+
+$('libraryBtn').addEventListener('click', ()=>{
+  try{
+    const res = JSON.parse(window.AndroidBridge.listLibrary() || '{}');
+    if(res.error){ showStatus('读取本地库失败', 'error'); return; }
+    renderLocalList(res.list, 'library');
+  }catch(e){
+    showStatus('读取本地库失败：' + (e.message||e), 'error');
+  }
+});
+
+$('localList').addEventListener('click', async e=>{
+  const btn = e.target.closest('button[data-act]');
+  if(!btn) return;
+  const it = localItems[Number(btn.dataset.idx)];
+  if(!it) return;
+  const act = btn.dataset.act;
+
+  if(act === 'import'){
+    showLoading('正在导入本地库...', it.name || '');
+    await new Promise(r=> setTimeout(r, 50));
+    try{
+      const res = JSON.parse(window.AndroidBridge.importLocalAudio(Number(it.id)) || '{}');
+      hideLoading();
+      if(res && res.name){
+        showStatus('已加入本地库：' + res.name, 'success');
+        setTimeout(hideStatus, 2200);
+        openLibraryFile(res.name);
+      } else {
+        showStatus('导入失败：' + ((res && res.error) || '未知错误'), 'error');
+      }
+    }catch(err){
+      hideLoading();
+      showStatus('导入失败：' + (err.message||err), 'error');
+    }
+  } else if(act === 'open'){
+    openLibraryFile(it.name);
+  } else if(act === 'del'){
+    if(!confirm(`确定从本地库删除「${it.name}」？`)) return;
+    try{
+      const ok = window.AndroidBridge.deleteLibraryFile(it.name);
+      if(ok){
+        showStatus('已删除','success');
+        setTimeout(hideStatus, 1500);
+        const res = JSON.parse(window.AndroidBridge.listLibrary() || '{}');
+        renderLocalList(res.list, 'library');
+      } else {
+        showStatus('删除失败','error');
+      }
+    }catch(err){ showStatus('删除失败','error'); }
+  }
+});
+
 function loadAudioBlob(blob, name){
   state.audioBlob = blob;
   state.audioName = name || 'audio';
@@ -581,9 +725,24 @@ function loadAudioBlob(blob, name){
   const sizeMB = blob.size/1024/1024;
   const sizeTxt = sizeMB >= 1 ? sizeMB.toFixed(2)+' MB' : (blob.size/1024).toFixed(0)+' KB';
   $('audioFileName').textContent = `${name}（${sizeTxt}）`;
+  // 命中历史转写结果则直接恢复，不必重新转写
+  let restored = false;
+  const cached = getTranscriptCache(audioKey(name, blob));
+  if(cached && cached.text){
+    state.fullText = cached.text;
+    state.segments = (cached.segments||[]).map((s, i)=>({start:s.start, end:s.end, text:s.text, idx:i}));
+    if(state.segments.length){
+      renderSegments();
+      $('vocabBtn').disabled = false;
+      $('quizBtn').disabled = false;
+      restored = true;
+    }
+  }
   initWaveSurfer();
   $('playerArea').scrollIntoView({behavior:'smooth', block:'start'});
-  showStatus(`✅ 已加载：${name}（${sizeTxt}）`, 'success');
+  showStatus(restored
+    ? `✅ 已加载：${name}（${sizeTxt}）· 已恢复上次转写结果，可直接精听`
+    : `✅ 已加载：${name}（${sizeTxt}）· 可直接播放，需要时再点转写`, 'success');
 }
 
 /* ---------- 来源切换 ---------- */
@@ -774,6 +933,32 @@ function resetAll(){
   hideLoading();
   showStatus('已清空，可重新输入链接或上传文件', 'success');
   window.scrollTo({top:0, behavior:'smooth'});
+}
+
+/* ---------- 转写结果本地缓存（重传同一文件免重转） ---------- */
+const LS_TRANS = 'listen_train_transcripts';
+function audioKey(name, blob){ return `${name||'audio'}|${blob?blob.size:0}`; }
+function loadTransCacheMap(){
+  try{ return JSON.parse(localStorage.getItem(LS_TRANS)||'{}') || {}; }catch(e){ return {}; }
+}
+function getTranscriptCache(key){
+  const m = loadTransCacheMap();
+  return m[key] || null;
+}
+function saveTranscriptCache(key, text, segments){
+  if(!text) return;
+  const m = loadTransCacheMap();
+  m[key] = {
+    text,
+    segments: (segments||[]).map(s=>({start:s.start, end:s.end, text:s.text})),
+    t: Date.now()
+  };
+  const keys = Object.keys(m);
+  if(keys.length > 30){
+    keys.sort((a,b)=> (m[a].t||0)-(m[b].t||0));
+    keys.slice(0, keys.length-30).forEach(k=> delete m[k]);
+  }
+  try{ localStorage.setItem(LS_TRANS, JSON.stringify(m)); }catch(e){}
 }
 
 /* 只清转写与 AI 结果，保留当前音频 */
@@ -1128,6 +1313,7 @@ async function runTranscribe(){
 
     renderSegments();
     pushHistory();
+    saveTranscriptCache(audioKey(state.audioName, state.audioBlob), state.fullText, state.segments);
     showStatus(`转写完成，共 ${state.segments.length} 句 · ${Math.round(state.fullText.length)} 字符`, 'success');
     $('vocabBtn').disabled = !state.fullText;
     $('quizBtn').disabled = !state.fullText;
@@ -1212,7 +1398,18 @@ async function runTranscribeNative(){
   state.nativeTranscribing = true;
   setBtnLoading($('transcribeBtn'), true);
   showStatus('正在读取音频...');
-  showLoading('本地 Whisper 转写中...', '使用内置模型离线识别，无需联网');
+  state.nativeCancelled = false;
+  // 可取消：中断原生转写并复位按钮
+  showLoading('本地 Whisper 转写中...', '使用内置模型离线识别，无需联网', ()=>{
+    state.nativeCancelled = true;
+    try{ if(window.AndroidBridge && window.AndroidBridge.cancelTranscribe) window.AndroidBridge.cancelTranscribe(); }catch(e){}
+    if(window.__nativeTranscribeReject){
+      try{ window.__nativeTranscribeReject(new Error('已取消')); }catch(e){}
+      window.__nativeTranscribeReject = null;
+    }
+    state.nativeTranscribing = false;
+    setBtnLoading($('transcribeBtn'), false);
+  });
   try{
     const modelId = state.whisperModel.indexOf('tiny') >= 0 ? 'tiny' : 'base';
 
@@ -1225,8 +1422,10 @@ async function runTranscribeNative(){
     // 2) 触发转写
     const result = await new Promise((resolve, reject)=>{
       const id = 'nt' + Date.now() + '_' + Math.floor(Math.random()*1e6);
+      window.__nativeTranscribeReject = reject;
       window.__onNativeTranscribe = (cid, r)=>{
         if(cid !== id) return;
+        window.__nativeTranscribeReject = null;
         if(r && r.ok){ resolve(r); }
         else reject(new Error((r && r.error) || '转写失败'));
       };
@@ -1252,6 +1451,7 @@ async function runTranscribeNative(){
     }
     renderSegments();
     pushHistory();
+    saveTranscriptCache(audioKey(state.audioName, state.audioBlob), state.fullText, state.segments);
     const used = result.model || modelId;
     const fallbackTip = (modelId === 'base' && used === 'tiny') ? '（精简版未内置 base，已用 tiny）' : '';
     const vadTip = result.vad ? ' · 智能断句' : '';
@@ -1260,9 +1460,15 @@ async function runTranscribeNative(){
     $('quizBtn').disabled = !state.fullText;
   }catch(err){
     hideLoading();
-    console.error(err);
-    showStatus('转写失败: ' + (err.message||err), 'error');
+    if(state.nativeCancelled){
+      showStatus('已取消转写', 'warn');
+      setTimeout(hideStatus, 1800);
+    } else {
+      console.error(err);
+      showStatus('转写失败: ' + (err.message||err), 'error');
+    }
   }finally{
+    window.__nativeTranscribeReject = null;
     state.nativeTranscribing = false;
     setBtnLoading($('transcribeBtn'), false);
   }

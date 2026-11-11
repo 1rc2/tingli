@@ -7,8 +7,12 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.ContentUris;
+import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.provider.MediaStore;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -71,6 +75,26 @@ public class MainActivity extends Activity {
                         headers.put("Cross-Origin-Embedder-Policy", "require-corp");
                         return new WebResourceResponse("text/html", "utf-8", 200, "OK", headers, is);
                     } catch (IOException e) {
+                        return null;
+                    }
+                }
+                // 本地库文件：https://app.local/library/<name> → 直接读应用私有目录
+                if (url.startsWith(LOCAL_ORIGIN + "library/")) {
+                    try {
+                        String name = java.net.URLDecoder.decode(
+                                url.substring((LOCAL_ORIGIN + "library/").length()), "UTF-8");
+                        if (name.contains("/") || name.contains("..")) return null;
+                        File f = new File(new File(getFilesDir(), "library"), name);
+                        if (!f.exists()) return null;
+                        Map<String, String> h = new HashMap<>();
+                        h.put("Access-Control-Allow-Origin", "*");
+                        h.put("Accept-Ranges", "bytes");
+                        String mime = name.toLowerCase().endsWith(".mp3") ? "audio/mpeg"
+                                : name.toLowerCase().endsWith(".m4a") ? "audio/mp4"
+                                : name.toLowerCase().endsWith(".wav") ? "audio/wav" : "audio/*";
+                        InputStream is = new java.io.FileInputStream(f);
+                        return new WebResourceResponse(mime, null, 200, "OK", h, is);
+                    } catch (Exception e) {
                         return null;
                     }
                 }
@@ -147,6 +171,154 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void transcribeCancel() {
                 try { whisperEngine.closeAudio(); } catch (Throwable ignored) {}
+            }
+
+            @android.webkit.JavascriptInterface
+            public void cancelTranscribe() {
+                whisperEngine.cancel();
+            }
+
+            /* ---------- 本地音频库 ---------- */
+
+            @android.webkit.JavascriptInterface
+            public boolean hasStoragePermission() {
+                if (Build.VERSION.SDK_INT < 23) return true;
+                return checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+                        == PackageManager.PERMISSION_GRANTED;
+            }
+
+            @android.webkit.JavascriptInterface
+            public void requestStoragePermission() {
+                if (Build.VERSION.SDK_INT >= 23) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 200);
+                        }
+                    });
+                }
+            }
+
+            /** 扫描本机文件名含「听力」或 listening 的音频，返回 {list:[{id,name,size,duration}]}。 */
+            @android.webkit.JavascriptInterface
+            public String scanLocalAudio() {
+                try {
+                    if (!hasStoragePermission()) return "{\"needPermission\":true}";
+                    org.json.JSONArray arr = new org.json.JSONArray();
+                    String[] proj = {
+                            MediaStore.Audio.Media._ID,
+                            MediaStore.Audio.Media.DISPLAY_NAME,
+                            MediaStore.Audio.Media.SIZE,
+                            MediaStore.Audio.Media.DURATION
+                    };
+                    String col = MediaStore.Audio.Media.DISPLAY_NAME;
+                    String sel = col + " LIKE ? OR " + col + " LIKE ?";
+                    String[] args = {"%听力%", "%listening%"};
+                    Cursor c = getContentResolver().query(
+                            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, proj, sel, args,
+                            col + " ASC");
+                    if (c != null) {
+                        while (c.moveToNext()) {
+                            org.json.JSONObject o = new org.json.JSONObject();
+                            o.put("id", c.getLong(0));
+                            o.put("name", c.getString(1) == null ? "" : c.getString(1));
+                            o.put("size", c.getLong(2));
+                            o.put("duration", c.getLong(3));
+                            arr.put(o);
+                        }
+                        c.close();
+                    }
+                    org.json.JSONObject out = new org.json.JSONObject();
+                    out.put("list", arr);
+                    return out.toString();
+                } catch (Throwable e) {
+                    return "{\"error\":\"" + (e.getMessage() == null ? "扫描失败" : e.getMessage().replace("\"", "'")) + "\"}";
+                }
+            }
+
+            /** 把选中的音频复制进应用私有库，返回 {name}。 */
+            @android.webkit.JavascriptInterface
+            public String importLocalAudio(long id) {
+                InputStream in = null;
+                OutputStream out = null;
+                try {
+                    Uri uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
+                    String displayName = null;
+                    Cursor c = getContentResolver().query(uri,
+                            new String[]{MediaStore.Audio.Media.DISPLAY_NAME}, null, null, null);
+                    if (c != null) {
+                        if (c.moveToFirst()) displayName = c.getString(0);
+                        c.close();
+                    }
+                    if (displayName == null || displayName.trim().isEmpty()) displayName = "audio_" + id + ".mp3";
+                    String safe = displayName.replaceAll("[\\\\/:*?\"<>|]", "_");
+
+                    File dir = new File(getFilesDir(), "library");
+                    if (!dir.exists()) dir.mkdirs();
+                    File dest = new File(dir, safe);
+                    in = getContentResolver().openInputStream(uri);
+                    out = new java.io.FileOutputStream(dest);
+                    byte[] buf = new byte[1 << 16];
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    o.put("name", safe);
+                    o.put("size", dest.length());
+                    return o.toString();
+                } catch (Throwable e) {
+                    return "{\"error\":\"" + (e.getMessage() == null ? "导入失败" : e.getMessage().replace("\"", "'")) + "\"}";
+                } finally {
+                    try { if (in != null) in.close(); } catch (Exception ignored) {}
+                    try { if (out != null) out.close(); } catch (Exception ignored) {}
+                }
+            }
+
+            /** 列出应用本地库中的音频。 */
+            @android.webkit.JavascriptInterface
+            public String listLibrary() {
+                try {
+                    org.json.JSONArray arr = new org.json.JSONArray();
+                    File dir = new File(getFilesDir(), "library");
+                    File[] files = dir.listFiles();
+                    if (files != null) {
+                        java.util.Arrays.sort(files, new java.util.Comparator<File>() {
+                            @Override public int compare(File a, File b) {
+                                return Long.compare(b.lastModified(), a.lastModified());
+                            }
+                        });
+                        for (File f : files) {
+                            if (!f.isFile()) continue;
+                            org.json.JSONObject o = new org.json.JSONObject();
+                            o.put("name", f.getName());
+                            o.put("size", f.length());
+                            arr.put(o);
+                        }
+                    }
+                    org.json.JSONObject out = new org.json.JSONObject();
+                    out.put("list", arr);
+                    return out.toString();
+                } catch (Throwable e) {
+                    return "{\"error\":\"读取本地库失败\"}";
+                }
+            }
+
+            @android.webkit.JavascriptInterface
+            public boolean deleteLibraryFile(String name) {
+                try {
+                    if (name == null || name.contains("/") || name.contains("..")) return false;
+                    File f = new File(new File(getFilesDir(), "library"), name);
+                    return f.delete();
+                } catch (Throwable e) {
+                    return false;
+                }
+            }
+
+            @android.webkit.JavascriptInterface
+            public String libraryUrl(String name) {
+                try {
+                    return LOCAL_ORIGIN + "library/" + java.net.URLEncoder.encode(name, "UTF-8");
+                } catch (Exception e) {
+                    return "";
+                }
             }
 
             @android.webkit.JavascriptInterface

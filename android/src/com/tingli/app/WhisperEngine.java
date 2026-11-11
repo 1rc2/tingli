@@ -50,6 +50,12 @@ public class WhisperEngine {
 
     private OfflineRecognizer recognizer;
     private String loadedModel = "";
+    private volatile boolean cancelled = false;
+
+    /** 请求中断当前转写。 */
+    public void cancel() {
+        cancelled = true;
+    }
 
     // 音频收集状态
     private File audioFile;
@@ -133,6 +139,7 @@ public class WhisperEngine {
      * 返回 JSON：{ok, text, duration}。
      */
     public String transcribe(Context ctx, String modelDir, String modelTag, File src, Progress progress) throws Exception {
+        cancelled = false;
         File pcmFile = new File(ctx.getCacheDir(), "tingli_pcm_" + System.currentTimeMillis() + ".f32");
         double duration;
         try {
@@ -152,6 +159,7 @@ public class WhisperEngine {
                     recognizeWithVad(ctx, pcmFile, segments, allText, progress);
                     usedVad = segments.length() > 0;
                 } catch (Throwable e) {
+                    if (cancelled) throw new Exception("已取消");
                     segments = new JSONArray();
                     allText.setLength(0);
                     usedVad = false;
@@ -201,6 +209,7 @@ public class WhisperEngine {
                     }
                 }
                 if (n == 0) break;
+                if (cancelled) throw new InterruptedException("已取消");
                 float[] chunk = (n == WIN) ? window : Arrays.copyOf(window, n);
                 vad.acceptWaveform(chunk);
                 readFrames += n;
@@ -276,6 +285,7 @@ public class WhisperEngine {
                     }
                 }
                 if (filled <= 0) break;
+                if (cancelled) throw new IOException("已取消");
 
                 String text = recognizeSamples(filled == n ? buf : Arrays.copyOf(buf, filled));
                 if (text != null) {

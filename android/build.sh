@@ -10,6 +10,13 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT="$DIR/build"
 PKG="com.tingli.app"
 PKG_PATH="com/tingli/app"
+# full = 双模型 + 双 ABI；lite = 仅 tiny + 仅 arm64（体积小约一半）
+VARIANT="${VARIANT:-full}"
+if [ "$VARIANT" = "lite" ]; then
+  OUT_APK="$DIR/tingli-lite.apk"
+else
+  OUT_APK="$DIR/tingli.apk"
+fi
 
 # 检查离线转写依赖，缺失则自动下载
 if [ ! -f "$DIR/libs/sherpa-onnx.jar" ] || [ ! -f "$DIR/libs/kotlin-stdlib.jar" ] \
@@ -50,14 +57,22 @@ echo "==> 4/6 dex 化"
   "$DIR/libs/sherpa-onnx.jar" \
   "$DIR/libs/kotlin-stdlib.jar"
 
-echo "==> 5/6 打包 classes.dex + native 库 + 对齐"
+echo "==> 5/6 打包 classes.dex + native 库 + 对齐（变体：$VARIANT）"
 cp "$OUT/app.unsigned.apk" "$OUT/app.dexed.apk"
-mkdir -p "$OUT/apk/lib/arm64-v8a" "$OUT/apk/lib/armeabi-v7a"
+mkdir -p "$OUT/apk/lib/arm64-v8a"
 cp "$DIR/jni/arm64-v8a/libsherpa-onnx-jni.so" "$OUT/apk/lib/arm64-v8a/"
-cp "$DIR/jni/armeabi-v7a/libsherpa-onnx-jni.so" "$OUT/apk/lib/armeabi-v7a/"
-(cd "$OUT/apk" && zip -q -X "$OUT/app.dexed.apk" classes.dex \
-  "lib/arm64-v8a/libsherpa-onnx-jni.so" \
-  "lib/armeabi-v7a/libsherpa-onnx-jni.so")
+if [ "$VARIANT" = "lite" ]; then
+  # 精简版：仅 arm64 + 仅 tiny 模型
+  (cd "$OUT/apk" && zip -q -X "$OUT/app.dexed.apk" classes.dex \
+    "lib/arm64-v8a/libsherpa-onnx-jni.so")
+  (cd "$OUT/apk" && zip -q -d "$OUT/app.dexed.apk" "assets/models/whisper-base/*")
+else
+  mkdir -p "$OUT/apk/lib/armeabi-v7a"
+  cp "$DIR/jni/armeabi-v7a/libsherpa-onnx-jni.so" "$OUT/apk/lib/armeabi-v7a/"
+  (cd "$OUT/apk" && zip -q -X "$OUT/app.dexed.apk" classes.dex \
+    "lib/arm64-v8a/libsherpa-onnx-jni.so" \
+    "lib/armeabi-v7a/libsherpa-onnx-jni.so")
+fi
 "$BT/zipalign" -f 4 "$OUT/app.dexed.apk" "$OUT/app.aligned.apk"
 
 echo "==> 6/6 签名"
@@ -72,7 +87,7 @@ fi
 "$BT/apksigner" sign \
   --ks "$DIR/debug.keystore" \
   --ks-pass pass:android --key-pass pass:android \
-  --out "$DIR/tingli.apk" "$OUT/app.aligned.apk"
+  --out "$OUT_APK" "$OUT/app.aligned.apk"
 
-"$BT/apksigner" verify --verbose "$DIR/tingli.apk"
-echo "==> 完成：$DIR/tingli.apk"
+"$BT/apksigner" verify --verbose "$OUT_APK"
+echo "==> 完成：$OUT_APK"

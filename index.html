@@ -262,10 +262,17 @@ body{min-height:100vh;padding-bottom:70px}
   <div class="dl-banner" id="appBanner">
     <span class="dl-icon">📱</span>
     <div class="dl-text">
-      <div class="dl-title">下载 Android App</div>
-      <div class="dl-sub">独立安装包 · 主屏幕一键打开 · 免浏览器</div>
+      <div class="dl-title">下载 Android App（离线转写）</div>
+      <div class="dl-sub">内置 Whisper 引擎，无需联网 · 精简版 110MB / 完整版 280MB</div>
     </div>
-    <a class="dl-btn" href="tingli.apk" download>⬇️ 下载</a>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <a class="dl-btn" href="https://github.com/1rc2/tingli/releases/latest/download/tingli-lite.apk" download>⬇️ 精简版</a>
+      <a class="dl-btn" style="background:var(--text);color:#fff" href="https://github.com/1rc2/tingli/releases/latest/download/tingli.apk" download>⬇️ 完整版</a>
+    </div>
+  </div>
+  <div style="margin:-4px 0 14px;font-size:12px;line-height:1.7;color:var(--muted)">
+    精简版：仅 tiny 模型（更快、体积小），日常够用；完整版：tiny + base 双模型可切换（更准）。
+    均为离线转写，安装后无需联网。
   </div>
   <script>if(location.host==='app.local'){document.getElementById('appBanner').style.display='none';}</script>
 
@@ -480,6 +487,7 @@ const state = {
   blindMode: false,             // 盲听模式
   whisperModel: 'Xenova/whisper-base',  // 转写模型（tiny 更快 / base 更准）
   loadedModel: null,            // 当前已加载进内存的模型，用于检测切换
+  nativeTranscribing: false,    // App 端原生转写进行中，防重复点击
 };
 
 const LS_AI_CFG = 'listen_train_ai_config';
@@ -1131,13 +1139,38 @@ async function runTranscribe(){
 /* =========================================================
    本地离线转写（App 端 sherpa-onnx，不依赖网络）
    ========================================================= */
-function blobToBase64(blob){
+function arrayBufferToBase64(buf){
+  const bytes = new Uint8Array(buf);
+  const CHUNK = 0x8000; // 每次 32KB，避免 btoa 参数过长
+  let out = '';
+  for(let i = 0; i < bytes.length; i += CHUNK){
+    out += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(out);
+}
+
+function readBlobSlice(blob){
   return new Promise((resolve, reject)=>{
     const r = new FileReader();
-    r.onload = ()=> resolve(String(r.result).split(',')[1]);
+    r.onload = ()=> resolve(r.result);
     r.onerror = ()=> reject(new Error('音频读取失败'));
-    r.readAsDataURL(blob);
+    r.readAsArrayBuffer(blob);
   });
+}
+
+// 分块把音频推给原生，避免一次性大字符串导致 WebView/Java 内存暴涨闪退
+async function sendAudioToNative(blob, onProgress){
+  window.AndroidBridge.audioBegin();
+  const CHUNK = 1024 * 1024; // 1MB 原始字节
+  const total = blob.size;
+  for(let start = 0; start < total; start += CHUNK){
+    const slice = blob.slice(start, Math.min(start + CHUNK, total));
+    const buf = await readBlobSlice(slice);
+    window.AndroidBridge.audioChunk(arrayBufferToBase64(buf));
+    if(onProgress) onProgress(Math.min(start + CHUNK, total), total);
+    // 让出主线程，保证界面不卡死
+    await new Promise(r=> setTimeout(r, 0));
+  }
 }
 
 // 把完整文本按句末标点切分，时间戳按字符数比例在 [0, duration] 上分配
@@ -1171,13 +1204,21 @@ function buildSegmentsFromText(text, duration){
 }
 
 async function runTranscribeNative(){
+  if(state.nativeTranscribing) return;
+  state.nativeTranscribing = true;
   setBtnLoading($('transcribeBtn'), true);
+  showStatus('正在读取音频...');
   showLoading('本地 Whisper 转写中...', '使用内置模型离线识别，无需联网');
-  showStatus('正在解码音频...');
   try{
     const modelId = state.whisperModel.indexOf('tiny') >= 0 ? 'tiny' : 'base';
-    const b64 = await blobToBase64(state.audioBlob);
 
+    // 1) 分块传输音频（小内存占用）
+    await sendAudioToNative(state.audioBlob, (done, total)=>{
+      const pct = Math.round(done / total * 100);
+      $('loadingSub').textContent = `正在传输音频 ${pct}%`;
+    });
+
+    // 2) 触发转写
     const result = await new Promise((resolve, reject)=>{
       const id = 'nt' + Date.now() + '_' + Math.floor(Math.random()*1e6);
       window.__onNativeTranscribe = (cid, r)=>{
@@ -1185,7 +1226,12 @@ async function runTranscribeNative(){
         if(r && r.ok){ resolve(r); }
         else reject(new Error((r && r.error) || '转写失败'));
       };
-      window.AndroidBridge.transcribeNative(modelId, b64, id);
+      window.__onTranscribeProgress = (cid, done, total)=>{
+        if(cid !== id) return;
+        $('loadingSub').textContent = `识别中 ${done}/${total} 段`;
+      };
+      $('loadingSub').textContent = '正在加载模型...';
+      window.AndroidBridge.transcribeNative(modelId, id);
     });
 
     hideLoading();
@@ -1193,7 +1239,9 @@ async function runTranscribeNative(){
     state.segments = buildSegmentsFromText(state.fullText, result.duration || 0);
     renderSegments();
     pushHistory();
-    showStatus(`转写完成，共 ${state.segments.length} 句 · ${Math.round(state.fullText.length)} 字符（本地离线）`, 'success');
+    const used = result.model || modelId;
+    const fallbackTip = (modelId === 'base' && used === 'tiny') ? '（精简版未内置 base，已用 tiny）' : '';
+    showStatus(`转写完成，共 ${state.segments.length} 句 · ${Math.round(state.fullText.length)} 字符（本地离线${fallbackTip}）`, 'success');
     $('vocabBtn').disabled = !state.fullText;
     $('quizBtn').disabled = !state.fullText;
   }catch(err){
@@ -1201,6 +1249,7 @@ async function runTranscribeNative(){
     console.error(err);
     showStatus('转写失败: ' + (err.message||err), 'error');
   }finally{
+    state.nativeTranscribing = false;
     setBtnLoading($('transcribeBtn'), false);
   }
 }

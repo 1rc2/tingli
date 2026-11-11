@@ -16,6 +16,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -114,22 +115,62 @@ public class MainActivity extends Activity {
                 return getSharedPreferences("tingli", MODE_PRIVATE).getString("apiKey", "");
             }
             @android.webkit.JavascriptInterface
-            public void transcribeNative(final String modelId, final String base64Audio, final String callbackId) {
-                // 本地离线 Whisper 转写（sherpa-onnx），完全不走网络
+            public void audioBegin() {
+                try {
+                    whisperEngine.beginAudio(MainActivity.this);
+                } catch (Throwable ignored) {}
+            }
+
+            @android.webkit.JavascriptInterface
+            public void audioChunk(String base64Chunk) {
+                try {
+                    whisperEngine.appendAudioChunk(base64Chunk);
+                } catch (Throwable ignored) {}
+            }
+
+            @android.webkit.JavascriptInterface
+            public void transcribeCancel() {
+                try { whisperEngine.closeAudio(); } catch (Throwable ignored) {}
+            }
+
+            @android.webkit.JavascriptInterface
+            public void transcribeNative(final String modelId, final String callbackId) {
+                // 本地离线 Whisper 转写（sherpa-onnx），完全不走网络。
+                // 音频已通过 audioBegin/audioChunk 分块写入磁盘，这里不再接收大字符串。
                 new Thread(new Runnable() {
                     @Override public void run() {
                         String result;
                         try {
-                            String modelDir;
-                            if ("base".equals(modelId)) {
-                                modelDir = "models/whisper-base";
-                            } else {
+                            String modelTag = "base".equals(modelId) ? "base" : "tiny";
+                            String modelDir = "models/whisper-" + modelTag;
+                            // 精简版没有内置 base 模型时自动回退 tiny
+                            if (!hasAssetDir(modelDir)) {
+                                modelTag = "tiny";
                                 modelDir = "models/whisper-tiny";
                             }
-                            result = whisperEngine.transcribe(MainActivity.this, modelDir, base64Audio);
-                        } catch (Exception e) {
+                            File src = whisperEngine.finishAudio();
+                            if (src == null || !src.exists() || src.length() == 0) {
+                                throw new IOException("没有接收到音频数据，请重新上传");
+                            }
+                            result = whisperEngine.transcribe(MainActivity.this, modelDir, modelTag, src,
+                                new WhisperEngine.Progress() {
+                                    @Override public void onProgress(final int done, final int total) {
+                                        runOnUiThread(new Runnable() {
+                                            @Override public void run() {
+                                                String js = "window.__onTranscribeProgress && window.__onTranscribeProgress("
+                                                        + jsonStr(callbackId) + "," + done + "," + total + ")";
+                                                webView.evaluateJavascript(js, null);
+                                            }
+                                        });
+                                    }
+                                });
+                        } catch (OutOfMemoryError e) {
+                            result = "{\"ok\":false,\"error\":\"内存不足，请选择 tiny 模型或使用较短的音频\"}";
+                        } catch (Throwable e) {
                             String m = e.getMessage() == null ? "转写失败" : e.getMessage();
                             result = "{\"ok\":false,\"error\":\"" + m.replace("\\", " ").replace("\"", "'") + "\"}";
+                        } finally {
+                            try { whisperEngine.closeAudio(); } catch (Throwable ignored) {}
                         }
                         final String fresult = result;
                         runOnUiThread(new Runnable() {
@@ -211,6 +252,16 @@ public class MainActivity extends Activity {
             }
         } else {
             super.onActivityResult(requestCode, resultCode, data);
+        }
+    }
+
+    /** 检查 assets 下是否存在某个模型目录（精简版可能未内置 base）。 */
+    private boolean hasAssetDir(String dir) {
+        try {
+            String[] files = getAssets().list(dir);
+            return files != null && files.length > 0;
+        } catch (IOException e) {
+            return false;
         }
     }
 

@@ -197,6 +197,16 @@ body{min-height:100vh;padding-bottom:70px}
 .vb-actions button.mastered{background:#d1fae5;color:#065f46}
 .vb-actions button.del{background:#fee2e2;color:#991b1b}
 .vocab-book-item .vb-meta{font-size:11px;color:var(--text-muted);margin-top:4px}
+/* 生词本批量操作栏 */
+.vb-toolbar{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border);
+  background:#fafbfc;flex-wrap:wrap;font-size:13px}
+.vb-toolbar .vb-all{display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--text-muted)}
+.vb-toolbar .vb-count{color:var(--text-muted);font-size:12px}
+.vb-toolbar .btn-sm{padding:5px 10px;font-size:12px}
+.vb-toolbar .btn-danger{margin-left:auto}
+.vb-toolbar[hidden]{display:none}
+.vb-check{margin-right:2px;flex-shrink:0}
+.btn-danger{background:#dc2626!important;color:#fff!important;border-color:#dc2626!important}
 .history-item{padding:12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;cursor:pointer;background:#fff;transition:all .15s}
 .history-item:hover{border-color:var(--primary);background:var(--primary-light)}
 .history-item .hi-title{font-weight:600;font-size:13px;margin-bottom:3px}
@@ -1851,17 +1861,24 @@ function renderVocab(){
     if(!w) return;
     if(btn.dataset.act === 'speak'){ speakWord(w.word||''); return; }
     if(btn.dataset.act === 'fav'){
-      const ok = addToVocabBook(w.word, w.phonetic, w.pos, w.meaning);
-      showStatus(ok ? `已加入生词本：${w.word}` : `「${w.word}」已在生词本中`, ok?'success':'warn');
-      if(ok) renderVocab();
+      const res = toggleVocabBook(w.word, w.phonetic, w.pos, w.meaning);
+      if(res === 'added') showStatus(`已加入生词本：${w.word}`, 'success');
+      else if(res === 'removed') showStatus(`已从生词本移除：${w.word}`, 'warn');
+      renderVocab();
       renderVocabBook();
     }
   };
 }
 
 function speakWord(w){
-  if(!('speechSynthesis' in window)) return;
-  const u = new SpeechSynthesisUtterance(w);
+  const text = (w||'').trim();
+  if(!text) return;
+  // App 端 WebView 不实现 speechSynthesis，走原生 TTS
+  if(IS_APP && window.AndroidBridge && window.AndroidBridge.speak){
+    try{ window.AndroidBridge.speak(text); return; }catch(e){}
+  }
+  if(!('speechSynthesis' in window)){ showStatus('当前环境不支持发音', 'warn'); return; }
+  const u = new SpeechSynthesisUtterance(text);
   u.lang = 'en-US';
   u.rate = 0.9;
   window.speechSynthesis.cancel();
@@ -1873,14 +1890,24 @@ function speakWord(w){
    ========================================================= */
 function loadVocabBook(){ state.vocabBook = loadJSON(LS_VOCAB, []); }
 function saveVocabBook(){ saveJSON(LS_VOCAB, state.vocabBook); }
-function addToVocabBook(word, phonetic, pos, meaning){
+/** 收藏 / 取消收藏：返回 'added' | 'removed' | null */
+function toggleVocabBook(word, phonetic, pos, meaning){
   const w = (word||'').trim();
-  if(!w) return false;
-  const exist = state.vocabBook.find(v=> v.word.toLowerCase() === w.toLowerCase());
-  if(exist) return false;
+  if(!w) return null;
+  const key = w.toLowerCase();
+  const i = state.vocabBook.findIndex(v=> (v.word||'').toLowerCase() === key);
+  if(i >= 0){
+    state.vocabBook.splice(i, 1);
+    saveVocabBook();
+    return 'removed';
+  }
   state.vocabBook.unshift({ word: w, phonetic: phonetic||'', pos: pos||'', meaning: meaning||'', mastered:false, addedAt: Date.now() });
   saveVocabBook();
-  return true;
+  return 'added';
+}
+function isInVocabBook(word){
+  const key = (word||'').trim().toLowerCase();
+  return state.vocabBook.some(v=> (v.word||'').toLowerCase() === key);
 }
 function toggleVocabMastered(word){
   const v = state.vocabBook.find(x=> x.word.toLowerCase() === (word||'').toLowerCase());
@@ -1891,17 +1918,22 @@ function removeVocab(word){
   state.vocabBook = state.vocabBook.filter(x=> x.word.toLowerCase() !== (word||'').toLowerCase());
   saveVocabBook();
   renderVocabBook();
+  renderVocab();  // 同步 AI 词表里的收藏星标
 }
 function renderVocabBook(){
   const body = $('vocabBookBody');
   if(!body) return;
+  const toolbar = $('vbToolbar');
   if(!state.vocabBook.length){
-    body.innerHTML = '<div class="empty-tip">生词本还是空的。完成转写后点「② AI 提取生词」，再点词条右侧的 ⭐ 收藏。</div>';
+    if(toolbar) toolbar.hidden = true;
+    body.innerHTML = '<div class="empty-tip">生词本还是空的。完成转写后点「② AI 提取生词」，再点词条右侧的 ☆ 收藏。</div>';
     return;
   }
+  if(toolbar) toolbar.hidden = false;
   const item = v => `
     <div class="vocab-book-item">
       <div class="vb-head">
+        <input type="checkbox" class="vb-check" data-word="${escapeHtml(v.word)}" />
         <span class="vb-word">${escapeHtml(v.word)}</span>
         ${v.phonetic?`<span class="phonetic">/${escapeHtml(v.phonetic)}/</span>`:''}
         ${v.pos?`<span class="pos">${escapeHtml(v.pos)}</span>`:''}
@@ -1928,7 +1960,59 @@ function renderVocabBook(){
     else if(btn.dataset.act === 'master') toggleVocabMastered(btn.dataset.word);
     else if(btn.dataset.act === 'del') removeVocab(btn.dataset.word);
   };
+  body.onchange = e=>{
+    if(e.target.classList.contains('vb-check')) updateVbSelCount();
+  };
+  updateVbSelCount();
 }
+
+/* ---------- 生词本批量操作 ---------- */
+function vbSelectedWords(){
+  return [...document.querySelectorAll('#vocabBookBody .vb-check:checked')].map(el=> el.dataset.word);
+}
+function updateVbSelCount(){
+  const n = vbSelectedWords().length;
+  const cnt = $('vbSelCount');
+  if(cnt) cnt.textContent = `已选 ${n} 项`;
+  const all = $('vbSelectAll');
+  const total = document.querySelectorAll('#vocabBookBody .vb-check').length;
+  if(all) all.checked = total > 0 && n === total;
+}
+function vbBatchDelete(){
+  const words = vbSelectedWords();
+  if(!words.length){ showStatus('请先勾选要删除的词条', 'warn'); return; }
+  const set = new Set(words.map(w=> w.toLowerCase()));
+  const before = state.vocabBook.length;
+  state.vocabBook = state.vocabBook.filter(v=> !set.has((v.word||'').toLowerCase()));
+  saveVocabBook();
+  showStatus(`已删除 ${before - state.vocabBook.length} 个词`, 'success');
+  renderVocabBook();
+  renderVocab();
+}
+function vbBatchMaster(){
+  const words = vbSelectedWords();
+  if(!words.length){ showStatus('请先勾选要标记的词条', 'warn'); return; }
+  const set = new Set(words.map(w=> w.toLowerCase()));
+  let n = 0;
+  state.vocabBook.forEach(v=>{
+    if(set.has((v.word||'').toLowerCase()) && !v.mastered){ v.mastered = true; n++; }
+  });
+  saveVocabBook();
+  showStatus(`已标记 ${n} 个词为掌握`, n ? 'success' : 'warn');
+  renderVocabBook();
+}
+function initVocabBatchUI(){
+  const all = $('vbSelectAll');
+  if(all) all.addEventListener('change', ()=>{
+    document.querySelectorAll('#vocabBookBody .vb-check').forEach(c=>{ c.checked = all.checked; });
+    updateVbSelCount();
+  });
+  const bd = $('vbBatchDelete');
+  if(bd) bd.addEventListener('click', vbBatchDelete);
+  const bm = $('vbBatchMaster');
+  if(bm) bm.addEventListener('click', vbBatchMaster);
+}
+document.addEventListener('DOMContentLoaded', initVocabBatchUI);
 
 /* =========================================================
    学习历史（自动保存 / 回看）
@@ -2356,6 +2440,12 @@ else initAiChat();
 <div class="modal-mask" id="vocabBookModal">
   <div class="modal">
     <div class="modal-head"><h3>📖 生词本</h3><button class="modal-close" data-close="vocabBookModal">✕</button></div>
+    <div class="vb-toolbar" id="vbToolbar">
+      <label class="vb-all"><input type="checkbox" id="vbSelectAll" /> 全选</label>
+      <span class="vb-count" id="vbSelCount">已选 0 项</span>
+      <button class="btn btn-sm" id="vbBatchMaster">标记掌握</button>
+      <button class="btn btn-sm btn-danger" id="vbBatchDelete">删除所选</button>
+    </div>
     <div class="modal-body" id="vocabBookBody"></div>
   </div>
 </div>

@@ -38,6 +38,8 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
     private WhisperEngine whisperEngine = new WhisperEngine();
+    private android.speech.tts.TextToSpeech tts;
+    private boolean ttsReady = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,6 +60,19 @@ public class MainActivity extends Activity {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 200);
         }
+
+        // WebView 不实现 Web Speech API，单词朗读走系统 TTS
+        tts = new android.speech.tts.TextToSpeech(this, new android.speech.tts.TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int status) {
+                if (status == android.speech.tts.TextToSpeech.SUCCESS && tts != null) {
+                    int r = tts.setLanguage(java.util.Locale.US);
+                    ttsReady = (r != android.speech.tts.TextToSpeech.LANG_MISSING_DATA
+                            && r != android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED);
+                    tts.setSpeechRate(0.9f);
+                }
+            }
+        });
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -133,6 +148,29 @@ public class MainActivity extends Activity {
 
         // 暴露原生存储接口：API Key 存 Android 侧，页面不回显明文，只能覆盖更换
         webView.addJavascriptInterface(new Object() {
+            @android.webkit.JavascriptInterface
+            public void speak(final String text) {
+                if (text == null || text.trim().isEmpty()) return;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (tts == null) return;
+                        if (!ttsReady) {
+                            // 引擎可能仍在初始化，稍后重试一次
+                            new android.os.Handler(getMainLooper()).postDelayed(new Runnable() {
+                                @Override public void run() {
+                                    if (tts != null && ttsReady) {
+                                        tts.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "w1");
+                                    }
+                                }
+                            }, 500);
+                            return;
+                        }
+                        tts.stop();
+                        tts.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null,
+                                "w" + System.currentTimeMillis());
+                    }
+                });
+            }
             @android.webkit.JavascriptInterface
             public void saveApiKey(String key) {
                 getSharedPreferences("tingli", MODE_PRIVATE).edit().putString("apiKey", key).apply();
@@ -472,6 +510,15 @@ public class MainActivity extends Activity {
         }, "AndroidBridge");
 
         webView.loadUrl(LOCAL_ORIGIN + "index.html");
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (tts != null) {
+            try { tts.stop(); tts.shutdown(); } catch (Exception ignored) {}
+            tts = null;
+        }
+        super.onDestroy();
     }
 
     @Override

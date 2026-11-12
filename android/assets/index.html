@@ -1048,8 +1048,36 @@ $('rssPreset').addEventListener('change', e=>{
 });
 
 function parseRss(xmlText){
-  const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
-  if(doc.querySelector('parsererror')) throw new Error('RSS 格式解析失败');
+  // 清理常见 XML 坑：BOM、前导空白
+  let text = (xmlText || '').trim();
+  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  if(!text) throw new Error('订阅源返回为空');
+
+  // 1) 先判断是不是被 HTML 错误页/反爬页替换了
+  const htmlLike = /<!DOCTYPE html|<html[\s>]/i.test(text) && !/<rss|<feed/i.test(text);
+  if(htmlLike){
+    // 尝试从 HTML 页面里找 RSS link
+    const rssLink = text.match(/<link[^>]+type=["']application\/(rss|atom)\+xml["'][^>]+href=["']([^"']+)["']/i)
+                  || text.match(/<link[^>]+href=["']([^"']+)["'][^>]+type=["']application\/(rss|atom)\+xml["']/i);
+    const audioLink = text.match(/href=["']([^"']+\.(mp3|m4a|wav|aac|ogg))(\?[^"']*)?["']/i);
+    if(rssLink){
+      throw new Error(`该页面不是 RSS，但发现了订阅源：${rssLink[2] || rssLink[1]}（请用这个地址重新读取）`);
+    }
+    if(audioLink){
+      throw new Error('该页面是网页而非 RSS，但直接包含音频链接；可改用"网页音频"方式加载');
+    }
+    throw new Error('返回的是网页（可能是反爬页或错误页），不是订阅源 XML');
+  }
+
+  // 2) DOMParser 严格解析
+  let doc = new DOMParser().parseFromString(text, 'text/xml');
+  if(doc.querySelector('parsererror')){
+    // 宽松回退：用 HTML parser 解（容忍未闭合标签）
+    doc = new DOMParser().parseFromString(text, 'text/html');
+    const feed = doc.querySelector('rss, feed, channel');
+    if(!feed) throw new Error('XML 格式有语法错误，宽松解析也找不到根节点');
+  }
+
   const nodes = [...doc.querySelectorAll('item'), ...doc.querySelectorAll('entry')];
   const items = [];
   nodes.forEach(n=>{
@@ -1058,7 +1086,7 @@ function parseRss(xmlText){
     if(enc) audio = enc.getAttribute('url') || '';
     if(!audio){
       const links = [...n.querySelectorAll('link')];
-      const cand = links.find(l=> /audio|enclosure/i.test(l.getAttribute('rel')||''));
+      const cand = links.find(l=> /audio|enclosure/i.test(l.getAttribute('rel')||'') || /\.(mp3|m4a|wav|aac|ogg)(\?|$)/i.test(l.getAttribute('href')||''));
       if(cand) audio = cand.getAttribute('href') || '';
     }
     if(!audio || !/\.(mp3|m4a|wav|aac|ogg)(\?|$)/i.test(audio)) return;
@@ -1070,6 +1098,18 @@ function parseRss(xmlText){
   return items.slice(0, 30);
 }
 
+/* 从任意网页里挖出 .mp3/.m4a 直链（兜底手段） */
+function extractAudioFromHtml(html){
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const urls = new Set();
+  doc.querySelectorAll('audio[src], source[src]').forEach(el=>{
+    const s = el.getAttribute('src'); if(s) urls.add(s);
+  });
+  [...html.matchAll(/href=["']([^"']+\.(mp3|m4a|wav|aac|ogg))(\?[^"']*)?["']/gi)].forEach(m=> urls.add(m[1]+(m[3]||'')));
+  [...html.matchAll(/(?:^|["'(\s])(https?:\/\/[^"'\s<>)]+\.(mp3|m4a|wav|aac|ogg)(\?[^"'\s<>)]*)?)/gi)].forEach(m=> urls.add(m[1]));
+  return [...urls].slice(0, 10);
+}
+
 async function loadRss(){
   const url = ($('rssUrlInput').value || '').trim();
   if(!url) return showStatus('请选择或填写 RSS 地址','warn');
@@ -1077,7 +1117,33 @@ async function loadRss(){
   list.innerHTML = '<div class="hint" style="padding:10px">正在读取订阅源…</div>';
   showStatus('正在读取 RSS…');
   try{
-    const xml = await fetchTextThroughProxies(url);
+    let xml = await fetchTextThroughProxies(url);
+    // 如果拿到的是网页，尝试从里面找 RSS 或音频
+    const htmlLike = /<!DOCTYPE html|<html[\s>]/i.test(xml) && !/<rss|<feed/i.test(xml);
+    if(htmlLike){
+      const rssMatch = xml.match(/<link[^>]+type=["']application\/(rss|atom)\+xml["'][^>]+href=["']([^"']+)["']/i)
+                    || xml.match(/<link[^>]+href=["']([^"']+)["'][^>]+type=["']application\/(rss|atom)\+xml["']/i);
+      if(rssMatch){
+        const rssUrl = rssMatch[2] || rssMatch[1];
+        const abs = rssUrl.startsWith('http') ? rssUrl : new URL(rssUrl, url).href;
+        showStatus('页面里找到订阅源，自动跟进…');
+        xml = await fetchTextThroughProxies(abs);
+      } else {
+        const audios = extractAudioFromHtml(xml);
+        if(audios.length){
+          list.innerHTML = audios.map((a, i)=>`
+            <div class="rss-item" data-i="${i}">
+              <div class="rss-title">${escapeHtml(a.split('/').pop().split('?')[0])}</div>
+              <div class="rss-meta">网页中发现音频直链 · 点击加载</div>
+            </div>`).join('');
+          list.querySelectorAll('.rss-item').forEach((el, i)=>{
+            el.addEventListener('click', ()=> loadFromUrl(audios[i]));
+          });
+          showStatus(`页面不是订阅源，但找到 ${audios.length} 个音频直链，点击条目加载`, 'success');
+          return;
+        }
+      }
+    }
     const items = parseRss(xml);
     if(!items.length) throw new Error('未在订阅源中找到音频条目');
     list.innerHTML = items.map((it, i)=> `

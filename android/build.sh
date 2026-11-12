@@ -4,7 +4,9 @@
 set -euo pipefail
 
 SDK="${ANDROID_HOME:-/opt/android-sdk}"
-BT="$SDK/build-tools/35.0.1"
+BT="$(ls -1 "$SDK/build-tools" 2>/dev/null | sort -V | tail -1)"
+if [ -z "$BT" ]; then echo "未找到 build-tools，请先 sdkmanager 安装"; exit 1; fi
+BT="$SDK/build-tools/$BT"
 PLATFORM="$SDK/platforms/android-34/android.jar"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT="$DIR/build"

@@ -449,7 +449,11 @@ public class MainActivity extends Activity {
                                 int code = conn.getResponseCode();
                                 InputStream is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
                                 String resp = readStream(is);
-                                result = "{\"status\":" + code + ",\"body\":" + resp + "}";
+                                if(resp == null) resp = "";
+                                org.json.JSONObject wrapped = new org.json.JSONObject();
+                                wrapped.put("status", code);
+                                wrapped.put("body", resp);
+                                result = wrapped.toString();
                             }
                         } catch (Exception e) {
                             String m = e.getMessage() == null ? "network error" : e.getMessage();

@@ -244,6 +244,32 @@ body{min-height:100vh;padding-bottom:70px}
 .loading-mask .spinner-lg{width:40px;height:40px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite}
 .loading-mask p{margin:0;font-size:13px;max-width:240px;text-align:center}
 .loading-mask small{opacity:.7;font-size:11px}
+
+/* ===== AI 悬浮对话 ===== */
+.ai-fab{position:fixed;top:64px;right:14px;z-index:70;width:48px;height:48px;border-radius:50%;border:none;
+  background:linear-gradient(135deg,#2a6df4,#4f8bff);color:#fff;font-size:21px;line-height:1;cursor:pointer;
+  box-shadow:0 6px 18px rgba(42,109,244,.38);display:flex;align-items:center;justify-content:center}
+.ai-fab:active{transform:scale(.94)}
+.ai-panel{position:fixed;inset:0;z-index:90;background:var(--card);display:none;flex-direction:column}
+.ai-panel.open{display:flex}
+.ai-head{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border);
+  background:var(--card);flex-shrink:0}
+.ai-head b{font-size:15px}
+.ai-ctx{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted);margin-left:auto;font-weight:400}
+.ai-close{border:none;background:none;font-size:18px;color:var(--text-muted);cursor:pointer;padding:4px 6px}
+.ai-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--bg)}
+.ai-msg{max-width:86%;padding:9px 12px;border-radius:12px;font-size:14px;line-height:1.62;
+  white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+.ai-msg.user{align-self:flex-end;background:var(--primary);color:#fff;border-bottom-right-radius:4px}
+.ai-msg.ai{align-self:flex-start;background:var(--card);border:1px solid var(--border);border-bottom-left-radius:4px}
+.ai-msg.err{align-self:flex-start;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.ai-msg.tip{align-self:flex-start;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;font-size:13px}
+.ai-inputbar{display:flex;gap:8px;padding:10px;border-top:1px solid var(--border);
+  background:var(--card);flex-shrink:0;align-items:flex-end}
+.ai-inputbar textarea{flex:1;resize:none;padding:9px 12px;border:1px solid var(--border);border-radius:10px;
+  font-size:14px;font-family:inherit;line-height:1.4;max-height:110px;outline:none;background:var(--bg)}
+.ai-inputbar textarea:focus{border-color:var(--primary)}
+.ai-inputbar .btn{padding:9px 14px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -2222,6 +2248,108 @@ document.addEventListener('DOMContentLoaded', ()=>{
     });
   }
 });
+
+/* =========================================================
+   AI 悬浮对话
+   ========================================================= */
+function initAiChat(){
+  const fab = $('aiFab'), panel = $('aiPanel'), msgs = $('aiMsgs');
+  const input = $('aiInput'), sendBtn = $('aiSend'), useCtx = $('aiUseCtx');
+  if(!fab || !panel || !msgs) return;
+
+  const history = [];
+  let busy = false;
+  let greeted = false;
+  let stickBottom = true;
+
+  msgs.addEventListener('scroll', ()=>{
+    stickBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
+  });
+  function scrollBottom(){ if(stickBottom) msgs.scrollTop = msgs.scrollHeight; }
+
+  function addMsg(role, text){
+    const div = document.createElement('div');
+    div.className = 'ai-msg ' + role;
+    div.textContent = text;
+    msgs.appendChild(div);
+    scrollBottom();
+    return div;
+  }
+
+  function greet(){
+    if(greeted) return;
+    greeted = true;
+    addMsg('tip', '我是听力学习助手，可以：\n· 解释句子含义与语法点\n· 总结原文要点\n· 出听力练习题\n· 讲解生词用法\n\n勾选「引用当前原文」后，我会结合你正在练的材料回答。');
+  }
+
+  function buildSystem(){
+    let sys = '你是英语听力学习助手，面向备考大学英语六级的学生。回答简洁、准确、可直接用于学习：'
+      + '解释句子时给出中文翻译，并点出关键语法点或连读弱读；出题时给出题目、选项和答案解析。'
+      + '用中文回答，英文原文保持英文。';
+    if(useCtx.checked && state.fullText){
+      sys += '\n\n下面是用户当前正在练习的听力原文：\n"""\n' + state.fullText.slice(0, 6000) + '\n"""';
+    }
+    return { role:'system', content: sys };
+  }
+
+  async function send(){
+    const text = input.value.trim();
+    if(!text || busy) return;
+    if(!state.arkApiKey){
+      addMsg('err', IS_APP
+        ? '还没有填写 DeepSeek API Key，请到页面下方「AI 设置」填写后重试。'
+        : '还没有填写 API Key，请到页面「第 2 步」配置后重试。');
+      return;
+    }
+    busy = true;
+    sendBtn.disabled = true;
+    input.value = '';
+    input.style.height = 'auto';
+    // App 端原生桥从 SharedPreferences 读 Key，这里同步一次，避免「输入了但没保存」导致失败
+    if(IS_APP && window.AndroidBridge && window.AndroidBridge.saveApiKey){
+      try{ window.AndroidBridge.saveApiKey(state.arkApiKey); }catch(e){}
+    }
+    addMsg('user', text);
+    history.push({ role:'user', content: text });
+
+    const bubble = addMsg('ai', '思考中…');
+    try{
+      const messages = [buildSystem(), ...history.slice(-12)];
+      const reply = await callAI(messages);
+      bubble.textContent = reply || '（AI 未返回内容）';
+      if(reply) history.push({ role:'assistant', content: reply });
+    }catch(e){
+      bubble.className = 'ai-msg err';
+      bubble.textContent = '请求失败：' + (e.message || e);
+      history.pop(); // 失败轮不进入上下文，便于原样重试
+    }finally{
+      busy = false;
+      sendBtn.disabled = false;
+      scrollBottom();
+      if(window.innerWidth > 700) input.focus();
+    }
+  }
+
+  fab.addEventListener('click', ()=>{
+    panel.classList.add('open');
+    greet();
+    stickBottom = true;
+    scrollBottom();
+    setTimeout(()=> input.focus(), 80);
+  });
+  $('aiClose').addEventListener('click', ()=> panel.classList.remove('open'));
+  sendBtn.addEventListener('click', send);
+
+  input.addEventListener('keydown', e=>{
+    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); send(); }
+  });
+  input.addEventListener('input', ()=>{
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 110) + 'px';
+  });
+}
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initAiChat);
+else initAiChat();
 </script>
 
 <!-- 生词本 modal -->
@@ -2237,6 +2365,21 @@ document.addEventListener('DOMContentLoaded', ()=>{
   <div class="modal">
     <div class="modal-head"><h3>🕘 学习历史</h3><button class="modal-close" data-close="historyModal">✕</button></div>
     <div class="modal-body" id="historyBody"></div>
+  </div>
+</div>
+
+<!-- AI 悬浮对话 -->
+<button class="ai-fab" id="aiFab" type="button" aria-label="AI 对话">💬</button>
+<div class="ai-panel" id="aiPanel">
+  <div class="ai-head">
+    <b>🤖 AI 助手</b>
+    <label class="ai-ctx"><input type="checkbox" id="aiUseCtx" checked /> 引用当前原文</label>
+    <button class="ai-close" id="aiClose" type="button">✕</button>
+  </div>
+  <div class="ai-msgs" id="aiMsgs"></div>
+  <div class="ai-inputbar">
+    <textarea id="aiInput" rows="1" placeholder="问点什么…（如：这句话什么意思 / 帮我总结 / 出两道题）"></textarea>
+    <button class="btn btn-primary" id="aiSend" type="button">发送</button>
   </div>
 </div>
 </body>

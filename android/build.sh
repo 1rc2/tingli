@@ -51,6 +51,7 @@ javac -source 8 -target 8 \
   -d "$OUT/obj" \
   "$OUT/gen/$PKG_PATH/R.java" \
   "$DIR/src/$PKG_PATH/MainActivity.java" \
+  "$DIR/src/$PKG_PATH/TranscribeService.java" \
   "$DIR/src/$PKG_PATH/WhisperEngine.java"
 
 echo "==> 4/6 dex 化"

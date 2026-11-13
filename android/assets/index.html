@@ -254,6 +254,16 @@ body{min-height:100vh;padding-bottom:70px}
 .loading-mask .spinner-lg{width:40px;height:40px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite}
 .loading-mask p{margin:0;font-size:13px;max-width:240px;text-align:center}
 .loading-mask small{opacity:.7;font-size:11px}
+.loading-actions{display:flex;gap:10px;margin-top:14px}
+.loading-actions .btn{display:none;padding:7px 16px;font-size:13px}
+.mini-progress{position:fixed;left:12px;right:12px;bottom:14px;z-index:95;display:none;align-items:center;gap:9px;
+  padding:10px 14px;border-radius:12px;background:#1f2937;color:#fff;font-size:13px;
+  box-shadow:0 8px 24px rgba(0,0,0,.3);cursor:pointer}
+.mini-progress.show{display:flex}
+.mini-spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;
+  border-radius:50%;animation:spin 1s linear infinite;flex-shrink:0}
+#miniText{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#miniPct{opacity:.8;font-variant-numeric:tabular-nums}
 
 /* ===== AI 悬浮对话 ===== */
 .ai-fab{position:fixed;top:64px;right:14px;z-index:70;width:48px;height:48px;border-radius:50%;border:none;
@@ -498,7 +508,17 @@ body{min-height:100vh;padding-bottom:70px}
   <div class="spinner-lg"></div>
   <p id="loadingText">加载模型中...</p>
   <small id="loadingSub">首次加载 Whisper 需从 CDN 下载 ~70MB 模型</small>
-  <button id="loadingCancel" class="btn btn-secondary" type="button" style="display:none;margin-top:14px">取消</button>
+  <div class="loading-actions">
+    <button id="loadingMin" class="btn btn-secondary" type="button" style="display:none">最小化</button>
+    <button id="loadingCancel" class="btn btn-secondary" type="button" style="display:none">取消</button>
+  </div>
+</div>
+
+<!-- 最小化后的悬浮进度条 -->
+<div id="miniProgress" class="mini-progress">
+  <span class="mini-spin"></span>
+  <span id="miniText">转写中…</span>
+  <span id="miniPct">0%</span>
 </div>
 
 <script>
@@ -561,18 +581,59 @@ function hideStatus(){
   $('statusBar').className = 'status-bar';
 }
 let loadingCancelCb = null;
-function showLoading(text, sub='', onCancel){
+let loadingActive = false;
+let loadingMinimized = false;
+
+function showLoading(text, sub='', onCancel, canMinimize){
+  loadingActive = true;
+  loadingMinimized = false;
+  $('miniProgress').classList.remove('show');
   $('loadingMask').classList.add('show');
   $('loadingText').textContent = text;
   $('loadingSub').textContent = sub;
+  $('miniText').textContent = text;
+  $('miniPct').textContent = '0%';
   loadingCancelCb = onCancel || null;
   $('loadingCancel').style.display = loadingCancelCb ? 'inline-block' : 'none';
+  $('loadingMin').style.display = canMinimize ? 'inline-block' : 'none';
 }
-function hideLoading(){
+
+/** 统一更新副标题，同时同步最小化进度条 */
+function setLoadingSub(text){
+  $('loadingSub').textContent = text;
+  $('miniText').textContent = text;
+  const m = String(text).match(/(\d+)\s*%/);
+  if(m) $('miniPct').textContent = m[1] + '%';
+}
+
+function minimizeLoading(){
+  if(!loadingActive) return;
+  loadingMinimized = true;
   $('loadingMask').classList.remove('show');
-  $('loadingCancel').style.display = 'none';
-  loadingCancelCb = null;
+  $('miniProgress').classList.add('show');
 }
+
+function restoreLoading(){
+  if(!loadingActive) return;
+  loadingMinimized = false;
+  $('miniProgress').classList.remove('show');
+  $('loadingMask').classList.add('show');
+}
+
+function hideLoading(){
+  const wasMin = loadingMinimized;
+  loadingActive = false;
+  loadingMinimized = false;
+  $('loadingMask').classList.remove('show');
+  $('miniProgress').classList.remove('show');
+  $('loadingCancel').style.display = 'none';
+  $('loadingMin').style.display = 'none';
+  loadingCancelCb = null;
+  // 最小化状态完成时震一下，提示可以回来了
+  if(wasMin && navigator.vibrate){ try{ navigator.vibrate(200); }catch(e){} }
+}
+$('loadingMin').addEventListener('click', minimizeLoading);
+$('miniProgress').addEventListener('click', restoreLoading);
 $('loadingCancel').addEventListener('click', ()=>{
   const cb = loadingCancelCb;
   loadingCancelCb = null;
@@ -1425,7 +1486,7 @@ async function runTranscribe(){
       const ok = await loadWhisper();
       if(!ok || !state.pipeline){ return; }
     }
-    showLoading('Whisper 转写中...', '正在解码音频…');
+    showLoading('Whisper 转写中...', '正在解码音频…', null, true);
     showStatus('正在转写...');
 
     // Whisper 需要 16kHz 单声道 Float32Array，不能直接喂 ArrayBuffer
@@ -1443,9 +1504,9 @@ async function runTranscribe(){
     const t0 = Date.now();
     const timer = setInterval(()=>{
       const sec = Math.round((Date.now() - t0)/1000);
-      $('loadingSub').textContent = chunkCount > 0
+      setLoadingSub(chunkCount > 0
         ? `已用时 ${sec} 秒 · 已处理 ${chunkCount} 个音频片段`
-        : `已用时 ${sec} 秒`;
+        : `已用时 ${sec} 秒`);
     }, 1000);
 
     const result = await state.pipeline(waveform, {
@@ -1558,7 +1619,7 @@ async function runTranscribeNative(){
   setBtnLoading($('transcribeBtn'), true);
   showStatus('正在读取音频...');
   state.nativeCancelled = false;
-  // 可取消：中断原生转写并复位按钮
+  // 可取消 + 可最小化：转写会持续在后台运行，不影响继续看别的页面
   showLoading('本地 Whisper 转写中...', '使用内置模型离线识别，无需联网', ()=>{
     state.nativeCancelled = true;
     try{ if(window.AndroidBridge && window.AndroidBridge.cancelTranscribe) window.AndroidBridge.cancelTranscribe(); }catch(e){}
@@ -1568,14 +1629,14 @@ async function runTranscribeNative(){
     }
     state.nativeTranscribing = false;
     setBtnLoading($('transcribeBtn'), false);
-  });
+  }, true);
   try{
     const modelId = state.whisperModel.indexOf('tiny') >= 0 ? 'tiny' : 'base';
 
     // 1) 分块传输音频（小内存占用）
     await sendAudioToNative(state.audioBlob, (done, total)=>{
       const pct = Math.round(done / total * 100);
-      $('loadingSub').textContent = `正在传输音频 ${pct}%`;
+      setLoadingSub(`正在传输音频 ${pct}%`);
     });
 
     // 2) 触发转写
@@ -1590,11 +1651,11 @@ async function runTranscribeNative(){
       };
       window.__onTranscribeProgress = (cid, done, total)=>{
         if(cid !== id) return;
-        $('loadingSub').textContent = (total === 100)
+        setLoadingSub((total === 100)
           ? `识别中 ${done}%`
-          : `识别中 ${done}/${total} 段`;
+          : `识别中 ${done}/${total} 段`);
       };
-      $('loadingSub').textContent = '正在加载模型...';
+      setLoadingSub('正在加载模型...');
       window.AndroidBridge.transcribeNative(modelId, id);
     });
 

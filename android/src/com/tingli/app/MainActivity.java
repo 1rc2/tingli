@@ -214,6 +214,7 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void cancelTranscribe() {
                 whisperEngine.cancel();
+                TranscribeService.stop(MainActivity.this);
             }
 
             /* ---------- 本地音频库 ---------- */
@@ -415,10 +416,14 @@ public class MainActivity extends Activity {
             public void transcribeNative(final String modelId, final String callbackId) {
                 // 本地离线 Whisper 转写（sherpa-onnx），完全不走网络。
                 // 音频已通过 audioBegin/audioChunk 分块写入磁盘，这里不再接收大字符串。
+                TranscribeService.start(MainActivity.this, "正在加载模型…");
                 new Thread(new Runnable() {
+                    private long lastNotify = 0;
                     @Override public void run() {
                         String result;
                         try {
+                            // 后台转写：提高线程优先级，减少被系统调度拖延
+                            try { android.os.Process.setThreadPriority(-8); } catch (Throwable ignored) {}
                             String modelTag = "base".equals(modelId) ? "base" : "tiny";
                             String modelDir = "models/whisper-" + modelTag;
                             // 精简版没有内置 base 模型时自动回退 tiny
@@ -433,6 +438,12 @@ public class MainActivity extends Activity {
                             result = whisperEngine.transcribe(MainActivity.this, modelDir, modelTag, src,
                                 new WhisperEngine.Progress() {
                                     @Override public void onProgress(final int done, final int total) {
+                                        // 通知栏进度节流：最多每秒刷新一次
+                                        long now = System.currentTimeMillis();
+                                        if (now - lastNotify > 900) {
+                                            lastNotify = now;
+                                            TranscribeService.update(MainActivity.this, "识别中 " + done + "/" + total + " 段");
+                                        }
                                         runOnUiThread(new Runnable() {
                                             @Override public void run() {
                                                 String js = "window.__onTranscribeProgress && window.__onTranscribeProgress("
@@ -449,6 +460,7 @@ public class MainActivity extends Activity {
                             result = "{\"ok\":false,\"error\":\"" + m.replace("\\", " ").replace("\"", "'") + "\"}";
                         } finally {
                             try { whisperEngine.closeAudio(); } catch (Throwable ignored) {}
+                            TranscribeService.stop(MainActivity.this);
                         }
                         final String fresult = result;
                         runOnUiThread(new Runnable() {
